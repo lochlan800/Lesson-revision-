@@ -119,7 +119,8 @@
     background: var(--card); border: 1px solid var(--border); border-radius: 12px;
     padding: 12px 14px; margin-bottom: 10px; display: flex; gap: 10px; align-items: flex-start;
   }
-  .item .body { flex: 1; min-width: 0; white-space: pre-wrap; word-break: break-word; }
+  .item .body { flex: 1; min-width: 0; word-break: break-word; }
+  .item .body > div { white-space: pre-wrap; }
   .item .label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
   .wrong { color: var(--danger); }
   .right { color: var(--good); }
@@ -208,6 +209,13 @@ function topicsFor(subject, year) {
   data[subject][year] = data[subject][year] || [];
   return data[subject][year];
 }
+// Homework mistakes live apart from topics: data.homework["Maths|Year 9"] = [{id, hw, wrong, right}]
+function homeworkFor(subject, year) {
+  data.homework = data.homework || {};
+  const key = subject + "|" + year;
+  data.homework[key] = data.homework[key] || [];
+  return data.homework[key];
+}
 function subjectInfo(name) { return SUBJECTS.find(s => s.name === name) || SUBJECTS[0]; }
 function plural(n, word) { return n + " " + word + (n === 1 ? "" : "s"); }
 
@@ -225,6 +233,7 @@ function render() {
   closeRevise();
   if (!subject || !SUBJECTS.some(s => s.name === subject)) return renderSubjects();
   if (!year) return renderYears(subject);
+  if (topicId === "homework") return renderHomework(subject, year);
   const topic = topicsFor(subject, year).find(t => t.id === topicId);
   if (!topic) return renderTopics(subject, year);
   const lesson = topic.lessons.find(l => l.id === lessonId);
@@ -286,7 +295,16 @@ function renderTopics(subject, year) {
   const s = subjectInfo(subject);
   const topics = topicsFor(subject, year);
   setCrumbs([{ label: "Subjects", go: [] }, { label: subject, go: [subject] }, { label: year }]);
+  const homework = homeworkFor(subject, year);
   app.innerHTML = `<h2>${s.icon} ${subject} · ${year}</h2><p class="sub">Add the topics you're studying, then click one to add lessons.</p>
+    <div class="grid" style="margin-bottom:24px">
+      <div class="tile" id="homeworkTile">
+        <div class="stripe" style="background:var(--danger)"></div>
+        <div class="icon">📝</div><div class="name">Homework mistakes</div>
+        <div class="meta">${plural(homework.length, "mistake")}</div>
+      </div>
+    </div>
+    <h3 style="margin:0 0 10px">Topics</h3>
     <form class="add-row" id="addForm">
       <input type="text" id="newName" placeholder="New topic, e.g. Algebra" maxlength="80">
       <button class="btn" type="submit">+ Add topic</button>
@@ -308,6 +326,7 @@ function renderTopics(subject, year) {
     tile.onclick = () => go(subject, year, t.id);
     grid.append(tile);
   });
+  app.querySelector("#homeworkTile").onclick = () => go(subject, year, "homework");
   app.querySelector("#addForm").onsubmit = e => {
     e.preventDefault();
     const name = app.querySelector("#newName").value.trim();
@@ -393,29 +412,7 @@ function renderMistakes(body, lesson) {
     <div id="list"></div>`;
   const list = body.querySelector("#list");
   if (!lesson.mistakes.length) list.innerHTML = `<div class="empty">Nothing here yet. Add anything you got wrong in this lesson so you can learn from it.</div>`;
-  lesson.mistakes.forEach(m => {
-    const el = document.createElement("div");
-    el.className = "item";
-    el.innerHTML = `<div class="body">
-        <div class="label wrong">Got wrong</div><div>${esc(m.wrong)}</div>
-        ${m.right ? `<div class="label right" style="margin-top:8px">Correct</div><div>${esc(m.right)}</div>` : ""}
-      </div>`;
-    const edit = iconButton("✏️", "Edit", () => {
-      const wrong = prompt("What you got wrong:", m.wrong);
-      if (wrong === null || !wrong.trim()) return;
-      const right = prompt("The correct answer:", m.right);
-      if (right === null) return;
-      m.wrong = wrong.trim(); m.right = right.trim();
-      save(); render();
-    });
-    const del = iconButton("🗑️", "Delete", () => {
-      if (!confirm("Delete this mistake?")) return;
-      lesson.mistakes.splice(lesson.mistakes.indexOf(m), 1);
-      save(); render();
-    });
-    el.append(edit, del);
-    list.append(el);
-  });
+  lesson.mistakes.forEach(m => list.append(mistakeItem(m, lesson.mistakes)));
   body.querySelector("#form").onsubmit = e => {
     e.preventDefault();
     const wrong = body.querySelector("#wrong").value.trim();
@@ -425,6 +422,57 @@ function renderMistakes(body, lesson) {
     save(); render();
     app.querySelector("#wrong").focus();
   };
+}
+
+function renderHomework(subject, year) {
+  const s = subjectInfo(subject);
+  const mistakes = homeworkFor(subject, year);
+  setCrumbs([{ label: "Subjects", go: [] }, { label: subject, go: [subject] }, { label: year, go: [subject, year] }, { label: "Homework mistakes" }]);
+  const names = [...new Set(mistakes.map(m => m.hw).filter(Boolean))];
+  app.innerHTML = `<h2>📝 Homework mistakes</h2><p class="sub">${s.icon} ${subject} · ${year} — everything you got wrong in your homework.</p>
+    <div class="toolbar">
+      <button class="btn good" id="revise">🧠 Revise homework mistakes (${mistakes.length})</button>
+    </div>
+    <form class="panel" id="form">
+      <label class="check" style="margin-bottom:4px">Which homework?</label>
+      <input type="text" id="hw" list="hwNames" placeholder="e.g. Homework 3 – Fractions" maxlength="100" style="width:100%;margin-bottom:10px">
+      <datalist id="hwNames">${names.map(n => `<option value="${esc(n)}">`).join("")}</datalist>
+      <div class="form-grid">
+        <div><label>What I got wrong</label><textarea id="wrong" placeholder="e.g. I forgot to simplify 4/8"></textarea></div>
+        <div><label>The correct answer / how to fix it</label><textarea id="right" placeholder="e.g. 4/8 = 1/2"></textarea></div>
+      </div>
+      <div style="margin-top:10px"><button class="btn" type="submit">+ Add mistake</button></div>
+    </form>
+    <div id="list"></div>`;
+  const list = app.querySelector("#list");
+  if (!mistakes.length) list.innerHTML = `<div class="empty">No homework mistakes yet. Add anything you got wrong in your homework above.</div>`;
+  // Group by homework name, newest homework first
+  const groups = new Map();
+  mistakes.slice().reverse().forEach(m => {
+    const key = m.hw || "Other homework";
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).unshift(m);
+  });
+  groups.forEach((items, name) => {
+    const h = document.createElement("h3");
+    h.style.margin = "18px 0 8px";
+    h.textContent = `${name} (${items.length})`;
+    list.append(h, ...items.map(m => mistakeItem(m, mistakes)));
+  });
+  app.querySelector("#form").onsubmit = e => {
+    e.preventDefault();
+    const hw = app.querySelector("#hw").value.trim();
+    const wrong = app.querySelector("#wrong").value.trim();
+    const right = app.querySelector("#right").value.trim();
+    if (!wrong) return app.querySelector("#wrong").focus();
+    mistakes.push({ id: uid(), hw, wrong, right });
+    save(); render();
+    // Keep the homework name filled in so several mistakes can be added in a row
+    app.querySelector("#hw").value = hw;
+    app.querySelector("#wrong").focus();
+  };
+  app.querySelector("#revise").onclick = () =>
+    startRevise("Homework mistakes", [{ cards: [], mistakes }], true);
 }
 
 function renderCards(body, lesson) {
@@ -497,6 +545,29 @@ function iconButton(symbol, title, onClick) {
   b.textContent = symbol;
   b.onclick = e => { e.stopPropagation(); onClick(); };
   return b;
+}
+function mistakeItem(m, owner) {
+  const el = document.createElement("div");
+  el.className = "item";
+  el.innerHTML = `<div class="body">
+      <div class="label wrong">Got wrong</div><div>${esc(m.wrong)}</div>
+      ${m.right ? `<div class="label right" style="margin-top:8px">Correct</div><div>${esc(m.right)}</div>` : ""}
+    </div>`;
+  const edit = iconButton("✏️", "Edit", () => {
+    const wrong = prompt("What you got wrong:", m.wrong);
+    if (wrong === null || !wrong.trim()) return;
+    const right = prompt("The correct answer:", m.right);
+    if (right === null) return;
+    m.wrong = wrong.trim(); m.right = right.trim();
+    save(); render();
+  });
+  const del = iconButton("🗑️", "Delete", () => {
+    if (!confirm("Delete this mistake?")) return;
+    owner.splice(owner.indexOf(m), 1);
+    save(); render();
+  });
+  el.append(edit, del);
+  return el;
 }
 function editButtons(obj, kind, remove) {
   return [
