@@ -197,7 +197,7 @@
 </head>
 <body>
 <header>
-  <span class="hdr-stats" id="hdrStats" title="Your streak and time studied today"></span>
+  <span class="hdr-stats" id="hdrStats" title="Your streak and time studied today. ⏸️ = paused: the timer only runs on notes, mistakes, flashcards and while revising."></span>
   <h1 id="home">📚 Lesson Revision</h1>
   <div class="crumbs" id="crumbs"></div>
 </header>
@@ -1157,7 +1157,8 @@ function closeRevise() {
 
 // ---------- Streak & study timer ----------
 // data.stats.days["2026-10-22"] = seconds spent studying that day.
-// Time only counts while the page is open, visible and you've done something in the last 2 minutes.
+// Time only counts on learning screens (see isLearning), while the page is open, visible
+// and you've done something in the last 2 minutes.
 const STREAK_SECONDS = 60;          // a day counts towards the streak after 1 minute
 const IDLE_AFTER = 2 * 60 * 1000;
 let lastActivity = Date.now();
@@ -1293,7 +1294,8 @@ function renderStats(box) {
       <div class="stat"><div class="k">🔥 Streak</div><div class="v">${plural(st.current, "day")}</div>
         <div class="s">${streakMsg}</div><div class="s">Best streak: ${plural(st.best, "day")}</div></div>
       <div class="stat"><div class="k">⏱️ Studied today</div><div class="v" id="todayVal">${fmtTime(t.now)}</div>
-        <div class="s" id="todayMsg">${t.msg}</div><div class="meter"><div id="todayMeter" style="width:${t.pct}%"></div></div></div>
+        <div class="s" id="todayMsg">${t.msg}</div><div class="meter"><div id="todayMeter" style="width:${t.pct}%"></div></div>
+        <div class="s" style="margin-top:8px">Only counts time on notes, mistakes, flashcards and revising.</div></div>
       <div class="stat"><div class="k">🏆 Record day</div><div class="v">${rec.day ? fmtTime(rec.sec) : "—"}</div>
         <div class="s">${rec.day ? niceDate(rec.day) : ""}</div><div class="s" id="recMsg">${t.recMsg}</div></div>
     </div>
@@ -1355,8 +1357,20 @@ function showTip(e, text) {
 }
 function hideTip() { tip.style.display = "none"; }
 
+// Screens where you're actually learning: answering flashcards, and a lesson's notes,
+// mistakes and flashcards tabs, plus homework mistakes. Menus, links and scores don't count.
+function isLearning() {
+  if (overlay) return !!overlay.querySelector("#fc");
+  const [subject, year, topicId, lessonId] = route();
+  if (year === "homework") return true;
+  return !!lessonId && ["notes", "mistakes", "cards"].includes(lessonTab);
+}
+function timerCounting() {
+  return isLearning() && document.visibilityState === "visible" && Date.now() - lastActivity < IDLE_AFTER;
+}
+
 function dailyTimerText() {
-  return `🔥 ${streaks().current}  ·  ⏱️ ${fmtTime(studyDays()[today()] || 0)} today`;
+  return `🔥 ${streaks().current}  ·  ⏱️ ${fmtTime(studyDays()[today()] || 0)} today${timerCounting() ? "" : " ⏸️"}`;
 }
 
 function updateLive() {
@@ -1381,7 +1395,7 @@ function updateLive() {
 ["pointerdown", "pointermove", "keydown", "scroll", "wheel", "touchstart"].forEach(ev =>
   addEventListener(ev, () => { lastActivity = Date.now(); }, { passive: true }));
 setInterval(() => {
-  if (document.visibilityState === "visible" && Date.now() - lastActivity < IDLE_AFTER) {
+  if (timerCounting()) {
     const days = studyDays();
     days[today()] = (days[today()] || 0) + 1;
     if (++unsavedSeconds >= 15) { unsavedSeconds = 0; save(); }
