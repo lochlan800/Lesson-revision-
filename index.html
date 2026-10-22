@@ -396,10 +396,18 @@ function renderLessons(subject, year, topic) {
   setCrumbs([{ label: "Subjects", go: [] }, { label: subject, go: [subject] }, { label: year, go: [subject, year] }, { label: topic.name }]);
   const allCards = topic.lessons.flatMap(l => l.cards);
   const allMistakes = topic.lessons.flatMap(l => l.mistakes);
+  const due = dueSummary(topic.lessons);
   app.innerHTML = `<h2>${esc(topic.name)}</h2><p class="sub">${subject} · ${year}</p>
-    <div class="toolbar">
-      <button class="btn good" id="reviseTopic">🧠 Revise whole topic (${allCards.length} cards)</button>
-      <label class="check"><input type="checkbox" id="incMistakes"> Include things I got wrong (${allMistakes.length})</label>
+    <div class="panel">
+      <p style="margin-top:0"><b>📅 Spaced repetition</b> — ${due.due
+        ? `<b>${plural(due.due, "card")}</b> due today${due.fresh ? ` (${due.fresh} new)` : ""}`
+        : due.total ? `nothing due today 🎉 Next card due ${niceDate(due.next)}.` : "add some flashcards to get started."}</p>
+      <div class="toolbar" style="margin:0">
+        <button class="btn good" id="reviseTopic">🧠 Revise due cards (${due.due})</button>
+        <button class="btn secondary" id="practiseAll">Practise all ${plural(allCards.length, "card")}</button>
+        <label class="check"><input type="checkbox" id="incMistakes" checked> Include things I got wrong (${allMistakes.length})</label>
+      </div>
+      <p class="hint" style="margin-bottom:0">Cards you know well wait longer before coming back. Mistakes and improving cards come back sooner.</p>
     </div>
     <h3 style="margin:0 0 10px">Lessons</h3>
     <form class="add-row" id="addForm">
@@ -435,6 +443,8 @@ function renderLessons(subject, year, topic) {
     app.querySelector("#newName").focus();
   };
   app.querySelector("#reviseTopic").onclick = () =>
+    startRevise(topic.name, topic.lessons, app.querySelector("#incMistakes").checked, false, { spaced: true });
+  app.querySelector("#practiseAll").onclick = () =>
     startRevise(topic.name, topic.lessons, app.querySelector("#incMistakes").checked);
 }
 
@@ -826,7 +836,7 @@ function renderCards(body, lesson) {
     const el = document.createElement("div");
     el.className = "item";
     el.innerHTML = `<div class="body">
-        <div class="label">Front ${levelBadge(c.level)}${c.fromNote ? '<span class="badge">📒 from notes</span>' : c.fromMistake ? '<span class="badge">❌ from a mistake</span>' : ""}</div><div>${esc(c.q)}</div>
+        <div class="label">Front ${levelBadge(c.level)}<span class="badge">${dueText(c)}</span> ${c.fromNote ? '<span class="badge">📒 from notes</span>' : c.fromMistake ? '<span class="badge">❌ from a mistake</span>' : ""}</div><div>${esc(c.q)}</div>
         <div class="label" style="margin-top:8px">Back</div><div>${esc(c.a)}</div>
       </div>`;
     const edit = iconButton("✏️", "Edit", () => {
@@ -862,7 +872,7 @@ function renderReviseTab(body, lesson, topic, subject, year) {
   const yearLessons = topicsFor(subject, year).flatMap(t => t.lessons);
   const scopes = {
     lesson: { icon: "📄", label: "This lesson",          name: lesson.name,                 lessons: [lesson] },
-    topic:  { icon: "📚", label: "Whole topic so far",   name: topic.name,                  lessons: topic.lessons },
+    topic:  { icon: "📚", label: "Whole topic so far",   name: topic.name,                  lessons: topic.lessons, spaced: true },
     year:   { icon: "🎓", label: `Whole of ${year}`,     name: `${subject} · ${year}`,      lessons: yearLessons },
   };
   body.innerHTML = `<div class="panel">
@@ -872,7 +882,7 @@ function renderReviseTab(body, lesson, topic, subject, year) {
         <label class="check"><input type="checkbox" id="incMistakes" checked> Include things I got wrong</label>
         <label class="check"><input type="checkbox" id="onlyUnknown"> Only cards I'm not confident with yet</label>
       </div>
-      <p class="hint">Cards are shuffled. Click a card to flip it, then say whether you got it right.</p>
+      <p class="hint">Mistakes and improving cards come up more often. Click a card to flip it, then say whether you got it right.</p>
       <button class="btn good" id="go">Start revising</button>
     </div>`;
   const grid = body.querySelector("#scopes");
@@ -884,13 +894,14 @@ function renderReviseTab(body, lesson, topic, subject, year) {
     if (key === reviseScope) tile.style.cssText = "border:2px solid var(--accent);background:rgba(79,107,237,0.08)";
     tile.innerHTML = `<div class="icon">${sc.icon}</div><div class="name">${sc.label}</div>
       <div class="meta">${esc(sc.name)}</div>
-      <div class="meta">${plural(cards, "flashcard")} · ${plural(mistakes, "mistake")}${key === "lesson" ? "" : ` · ${plural(sc.lessons.length, "lesson")}`}</div>`;
+      <div class="meta">${plural(cards, "flashcard")} · ${plural(mistakes, "mistake")}${key === "lesson" ? "" : ` · ${plural(sc.lessons.length, "lesson")}`}</div>
+      ${sc.spaced ? `<div class="meta" style="color:var(--text)">📅 Spaced repetition: <b>${dueSummary(sc.lessons).due} due today</b></div>` : ""}`;
     tile.onclick = () => { reviseScope = key; render(); };
     grid.append(tile);
   });
   body.querySelector("#go").onclick = () => {
     const sc = scopes[reviseScope];
-    startRevise(sc.name, sc.lessons, body.querySelector("#incMistakes").checked, body.querySelector("#onlyUnknown").checked);
+    startRevise(sc.name, sc.lessons, body.querySelector("#incMistakes").checked, body.querySelector("#onlyUnknown").checked, { spaced: sc.spaced });
   };
 }
 
@@ -927,28 +938,97 @@ function shuffle(arr) {
 // ---------- Revise mode ----------
 let overlay = null;
 
-function startRevise(title, lessons, includeMistakes, onlyUnknown = false) {
-  let deck = [];
+// ---------- Spaced repetition ----------
+// Each card (or mistake) keeps srs = { box, due }. Confident moves it up a box so it waits longer
+// before coming back; slow moves it down one; wrong sends it back to the start (due again today).
+const INTERVALS = [0, 1, 3, 7, 14, 30, 60]; // days to wait in each box
+function isDue(item) { return !item.srs || item.srs.due <= today(); }
+function schedule(item, level, gotIt, isMistake) {
+  const box = item.srs ? item.srs.box : 0;
+  const next = !gotIt ? 0 : level === "confident" ? Math.min(box + 1, INTERVALS.length - 1) : Math.max(1, box - 1);
+  let days = INTERVALS[next];
+  // Mistakes come back twice as often as other cards
+  if (isMistake && days > 1) days = Math.ceil(days / 2);
+  item.srs = { box: next, due: addDays(today(), days) };
+}
+function dueText(item) {
+  if (!item.srs) return "🆕 new";
+  if (item.srs.due <= today()) return "📅 due today";
+  const days = Math.round((Date.parse(item.srs.due) - Date.parse(today())) / 86400000);
+  return days === 1 ? "📅 due tomorrow" : `📅 due in ${days} days`;
+}
+
+// Everything that could go in a round for these lessons
+function deckItems(lessons, includeMistakes, onlyUnknown) {
+  const items = [];
   lessons.forEach(l => {
-    l.cards.forEach(c => { if (!onlyUnknown || c.level !== "confident") deck.push({ kind: "card", front: c.q, back: c.a, ref: c }); });
+    l.cards.forEach(c => {
+      if (!onlyUnknown || c.level !== "confident")
+        items.push({ kind: "card", front: c.q, back: c.a, ref: c, isMistake: !!c.fromMistake });
+    });
     // Mistakes already turned into flashcards are in the deck above, so don't add them twice
-    if (includeMistakes) l.mistakes.filter(m => !l.cards.some(c => c.fromMistake === m.id)).forEach(m => deck.push({
+    if (includeMistakes) l.mistakes.filter(m => !l.cards.some(c => c.fromMistake === m.id)).forEach(m => items.push({
       kind: "mistake",
       front: m.wrong,
       back: (m.right || "(no correct answer written yet)") + (m.how ? "\n\nHow to work it out:\n" + m.how : ""),
       cat: m.cat,
       ref: m,
+      isMistake: true,
     }));
   });
-  if (!deck.length) {
+  return items;
+}
+function dueSummary(lessons) {
+  const items = deckItems(lessons, true, false);
+  const due = items.filter(it => isDue(it.ref));
+  const later = items.filter(it => !isDue(it.ref)).map(it => it.ref.srs.due).sort();
+  return { due: due.length, fresh: due.filter(it => !it.ref.srs).length, next: later[0] || null, total: items.length };
+}
+
+// Mistakes and improving cards get extra goes in a round: one more for each
+function weightedDeck(items) {
+  const deck = shuffle(items.slice());
+  const extras = [];
+  items.forEach(it => {
+    if (it.isMistake) extras.push(it);
+    if (it.ref.level === "improving") extras.push(it);
+  });
+  // Put each extra go somewhere in the second half, never right next to the same card
+  shuffle(extras).forEach(it => {
+    const start = Math.ceil(deck.length / 2);
+    const spots = [];
+    for (let k = start; k <= deck.length; k++) if (deck[k - 1] !== it && deck[k] !== it) spots.push(k);
+    deck.splice(spots.length ? spots[Math.floor(Math.random() * spots.length)] : deck.length, 0, it);
+  });
+  return deck;
+}
+
+// opts.spaced: only cards that are due (spaced repetition); otherwise every card, weighted
+function startRevise(title, lessons, includeMistakes, onlyUnknown = false, opts = {}) {
+  const items = deckItems(lessons, includeMistakes, onlyUnknown);
+  if (!items.length) {
     alert(onlyUnknown ? "You're confident with all of these cards already — nice! Untick 'Only cards I'm not confident with yet' to go again."
                       : "There's nothing to revise yet. Add some flashcards first!");
     return;
   }
-  runDeck(title, shuffle(deck));
+  const restart = () => startRevise(title, lessons, includeMistakes, onlyUnknown, opts);
+  if (opts.spaced) {
+    const due = items.filter(it => isDue(it.ref));
+    if (!due.length) {
+      const next = items.map(it => it.ref.srs.due).sort()[0];
+      if (confirm(`🎉 Nothing is due in this topic today! The next card is due ${niceDate(next)}.\n\nDo you want to practise everything anyway?`))
+        runDeck(title, weightedDeck(items), { restart });
+      return;
+    }
+    // Weakest first: mistakes and improving cards, then new, then the rest
+    const rank = it => (it.isMistake || it.ref.level === "improving" ? 0 : !it.ref.srs ? 1 : 2);
+    runDeck(title + " · spaced repetition", shuffle(due).sort((x, y) => rank(x) - rank(y)), { spaced: true, restart });
+    return;
+  }
+  runDeck(title, weightedDeck(items), { restart });
 }
 
-function runDeck(title, deck) {
+function runDeck(title, deck, opts = {}) {
   closeRevise();
   overlay = document.createElement("div");
   overlay.className = "overlay";
@@ -956,7 +1036,7 @@ function runDeck(title, deck) {
   document.body.style.overflow = "hidden";
   let i = 0;
   const missed = [];
-  const tally = { confident: 0, improving: 0 };
+  const tally = { confident: 0, improving: 0, right: 0, answered: 0 };
   let flipped = false;
   let shownAt = 0, thinkSeconds = null;
 
@@ -1015,35 +1095,43 @@ function runDeck(title, deck) {
     const card = deck[i];
     const level = gotIt && thinkSeconds <= CONFIDENT_SECONDS ? "confident" : "improving";
     tally[level]++;
+    tally.answered++;
+    if (gotIt) tally.right++;
     if (card.ref) {
       // Only the latest go counts, so a card you used to get wrong becomes confident once you know it well
       Object.assign(card.ref, { known: gotIt, level, lastSeconds: Math.round(thinkSeconds * 10) / 10 });
       logCardResult(card.ref.id, level);
+      schedule(card.ref, level, gotIt, card.isMistake);
     }
-    if (!gotIt) missed.push(card);
+    if (!gotIt) {
+      if (!missed.includes(card)) missed.push(card);
+      // Spaced repetition: a card you got wrong comes back again a few cards later
+      if (opts.spaced) deck.splice(Math.min(i + 4, deck.length), 0, card);
+    }
     save();
     i++;
     show();
   }
   function finish() {
     clearInterval(overlay.clock);
-    const score = deck.length - missed.length;
-    const pct = Math.round((score / deck.length) * 100);
+    const score = tally.right;
+    const pct = Math.round((score / tally.answered) * 100);
     const msg = pct === 100 ? "Perfect! 🎉" : pct >= 70 ? "Great work! 💪" : pct >= 40 ? "Good effort — keep going! 📈" : "Keep practising — you'll get there! 🌱";
     overlay.innerHTML = `
       <div class="result">
-        <div class="big">${score} / ${deck.length}</div>
+        <div class="big">${score} / ${tally.answered}</div>
+        <p class="hint">right answers</p>
         <p style="font-size:1.2rem">${msg}</p>
         <p>${levelBadge("confident")} <b>${tally.confident}</b> &nbsp; ${levelBadge("improving")} <b>${tally.improving}</b></p>
         <p class="hint">Confident = got it right in under ${CONFIDENT_SECONDS} seconds.</p>
         <div class="answer-btns" style="justify-content:center;flex-wrap:wrap">
           ${missed.length ? `<button class="btn" id="again">🔁 Revise the ${missed.length} I missed</button>` : ""}
-          <button class="btn secondary" id="all">Start over</button>
+          <button class="btn secondary" id="all">${opts.spaced ? "Check for more due cards" : "Start over"}</button>
           <button class="btn secondary" id="done">Done</button>
         </div>
       </div>`;
-    if (missed.length) overlay.querySelector("#again").onclick = () => runDeck(title, shuffle(missed.slice()));
-    overlay.querySelector("#all").onclick = () => runDeck(title, shuffle(deck.slice()));
+    if (missed.length) overlay.querySelector("#again").onclick = () => runDeck(title, shuffle(missed.slice()), opts);
+    overlay.querySelector("#all").onclick = () => { closeRevise(); render(); opts.restart(); };
     overlay.querySelector("#done").onclick = () => { closeRevise(); render(); };
   }
 
