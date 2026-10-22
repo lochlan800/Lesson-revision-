@@ -326,7 +326,7 @@ function renderTopics(subject, year) {
     tile.innerHTML = `<div class="stripe" style="background:${s.color}"></div>
       <div class="actions"></div>
       <div class="name">${esc(t.name)}</div>
-      <div class="meta">${plural(t.lessons.length, "lesson")} · ${plural(cards, "flashcard")}</div>`;
+      <div class="meta">${plural(t.lessons.length, "lesson")} · ${plural(cards, "flashcard")} · ${plural((t.links || []).length, "link")}</div>`;
     tile.querySelector(".actions").append(...editButtons(t, "topic", () => {
       topics.splice(topics.indexOf(t), 1);
     }));
@@ -354,11 +354,15 @@ function renderLessons(subject, year, topic) {
       <button class="btn good" id="reviseTopic">🧠 Revise whole topic (${allCards.length} cards)</button>
       <label class="check"><input type="checkbox" id="incMistakes"> Include things I got wrong (${allMistakes.length})</label>
     </div>
+    <h3 style="margin:0 0 10px">Lessons</h3>
     <form class="add-row" id="addForm">
       <input type="text" id="newName" placeholder="New lesson, e.g. Lesson 1 – Expanding brackets" maxlength="100">
       <button class="btn" type="submit">+ Add lesson</button>
     </form>
-    <div class="grid" id="grid"></div>`;
+    <div class="grid" id="grid"></div>
+    <h3 style="margin:28px 0 10px">🔗 Useful links</h3>
+    <div id="links"></div>`;
+  renderLinks(app.querySelector("#links"), topic);
   const grid = app.querySelector("#grid");
   if (!topic.lessons.length) grid.outerHTML = `<div class="empty">No lessons yet — add one above.</div>`;
   topic.lessons.forEach(l => {
@@ -385,6 +389,69 @@ function renderLessons(subject, year, topic) {
   };
   app.querySelector("#reviseTopic").onclick = () =>
     startRevise(topic.name, topic.lessons, app.querySelector("#incMistakes").checked);
+}
+
+// ---------- Useful links (one list per topic) ----------
+// Only web links are allowed, so a saved link can never run code when clicked
+function cleanUrl(raw) {
+  let u = raw.trim();
+  if (!u) return null;
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(u)) u = "https://" + u;
+  try {
+    const parsed = new URL(u);
+    return /^https?:$/.test(parsed.protocol) ? parsed.href : null;
+  } catch { return null; }
+}
+
+function renderLinks(box, topic) {
+  topic.links = topic.links || [];
+  const editing = topic.links.find(l => l.id === editingId);
+  box.innerHTML = `<form class="panel" id="linkForm">
+      <div class="form-grid">
+        <div><label>Website address</label><input type="text" id="linkUrl" placeholder="e.g. www.bbc.co.uk/bitesize" style="width:100%"></div>
+        <div><label>Name (optional)</label><input type="text" id="linkTitle" placeholder="e.g. BBC Bitesize – Algebra" maxlength="100" style="width:100%"></div>
+      </div>
+      <div class="toolbar" style="margin:10px 0 0">
+        <button class="btn" type="submit">${editing ? "Save changes" : "+ Add link"}</button>
+        ${editing ? `<button class="btn secondary" type="button" id="linkCancel">Cancel</button>` : ""}
+      </div>
+    </form>
+    <div id="linkList"></div>`;
+  const $ = sel => box.querySelector(sel);
+  if (editing) {
+    $("#linkUrl").value = editing.url; $("#linkTitle").value = editing.title || "";
+    $("#linkCancel").onclick = () => { editingId = null; render(); };
+    $("#linkForm").scrollIntoView({ block: "center" });
+  }
+  const list = $("#linkList");
+  if (!topic.links.length) list.innerHTML = `<div class="empty">No links yet. Save useful websites and videos for this topic here.</div>`;
+  topic.links.forEach(l => {
+    const el = document.createElement("div");
+    el.className = "item";
+    const host = new URL(l.url).hostname.replace(/^www\./, "");
+    el.innerHTML = `<div class="body">
+        <a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent);font-weight:600">${esc(l.title || host)} ↗</a>
+        <div class="hint" style="margin:2px 0 0">${esc(host)}</div>
+      </div>`;
+    el.append(
+      iconButton("✏️", "Edit", () => { editingId = l.id; render(); }),
+      iconButton("🗑️", "Delete", () => {
+        if (!confirm("Delete this link?")) return;
+        topic.links.splice(topic.links.indexOf(l), 1);
+        save(); render();
+      }));
+    list.append(el);
+  });
+  $("#linkForm").onsubmit = e => {
+    e.preventDefault();
+    const url = cleanUrl($("#linkUrl").value);
+    if (!url) { alert("That doesn't look like a website address. Try something like www.bbc.co.uk/bitesize"); return $("#linkUrl").focus(); }
+    const title = $("#linkTitle").value.trim();
+    if (editing) Object.assign(editing, { url, title });
+    else topic.links.push({ id: uid(), url, title });
+    editingId = null;
+    save(); render();
+  };
 }
 
 function renderLesson(subject, year, topic, lesson) {
