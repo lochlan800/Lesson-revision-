@@ -209,12 +209,18 @@ function topicsFor(subject, year) {
   data[subject][year] = data[subject][year] || [];
   return data[subject][year];
 }
-// Homework mistakes live apart from topics: data.homework["Maths|Year 9"] = [{id, hw, wrong, right}]
-function homeworkFor(subject, year) {
+// Homework mistakes live apart from topics, one list per subject: data.homework["Maths"] = [{id, hw, wrong, right}]
+function homeworkFor(subject) {
   data.homework = data.homework || {};
-  const key = subject + "|" + year;
-  data.homework[key] = data.homework[key] || [];
-  return data.homework[key];
+  // Merge any lists saved per year by an earlier version ("Maths|Year 9") into the subject's list
+  Object.keys(data.homework).forEach(key => {
+    if (key.startsWith(subject + "|")) {
+      data.homework[subject] = (data.homework[subject] || []).concat(data.homework[key]);
+      delete data.homework[key];
+    }
+  });
+  data.homework[subject] = data.homework[subject] || [];
+  return data.homework[subject];
 }
 function subjectInfo(name) { return SUBJECTS.find(s => s.name === name) || SUBJECTS[0]; }
 function plural(n, word) { return n + " " + word + (n === 1 ? "" : "s"); }
@@ -233,7 +239,7 @@ function render() {
   closeRevise();
   if (!subject || !SUBJECTS.some(s => s.name === subject)) return renderSubjects();
   if (!year) return renderYears(subject);
-  if (topicId === "homework") return renderHomework(subject, year);
+  if (year === "homework") return renderHomework(subject);
   const topic = topicsFor(subject, year).find(t => t.id === topicId);
   if (!topic) return renderTopics(subject, year);
   const lesson = topic.lessons.find(l => l.id === lessonId);
@@ -278,7 +284,17 @@ function renderSubjects() {
 function renderYears(subject) {
   const s = subjectInfo(subject);
   setCrumbs([{ label: "Subjects", go: [] }, { label: subject }]);
-  app.innerHTML = `<h2>${s.icon} ${subject}</h2><p class="sub">Which school year are you in?</p><div class="grid" id="grid"></div>`;
+  const homework = homeworkFor(subject);
+  app.innerHTML = `<h2>${s.icon} ${subject}</h2>
+    <div class="grid" style="margin-bottom:24px">
+      <div class="tile" id="homeworkTile">
+        <div class="stripe" style="background:var(--danger)"></div>
+        <div class="icon">📝</div><div class="name">Homework mistakes</div>
+        <div class="meta">${plural(homework.length, "mistake")}</div>
+      </div>
+    </div>
+    <p class="sub">Which school year are you in?</p><div class="grid" id="grid"></div>`;
+  app.querySelector("#homeworkTile").onclick = () => go(subject, "homework");
   const grid = app.querySelector("#grid");
   YEARS.forEach(y => {
     const topics = (data[subject] && data[subject][y]) || [];
@@ -295,16 +311,7 @@ function renderTopics(subject, year) {
   const s = subjectInfo(subject);
   const topics = topicsFor(subject, year);
   setCrumbs([{ label: "Subjects", go: [] }, { label: subject, go: [subject] }, { label: year }]);
-  const homework = homeworkFor(subject, year);
   app.innerHTML = `<h2>${s.icon} ${subject} · ${year}</h2><p class="sub">Add the topics you're studying, then click one to add lessons.</p>
-    <div class="grid" style="margin-bottom:24px">
-      <div class="tile" id="homeworkTile">
-        <div class="stripe" style="background:var(--danger)"></div>
-        <div class="icon">📝</div><div class="name">Homework mistakes</div>
-        <div class="meta">${plural(homework.length, "mistake")}</div>
-      </div>
-    </div>
-    <h3 style="margin:0 0 10px">Topics</h3>
     <form class="add-row" id="addForm">
       <input type="text" id="newName" placeholder="New topic, e.g. Algebra" maxlength="80">
       <button class="btn" type="submit">+ Add topic</button>
@@ -326,7 +333,6 @@ function renderTopics(subject, year) {
     tile.onclick = () => go(subject, year, t.id);
     grid.append(tile);
   });
-  app.querySelector("#homeworkTile").onclick = () => go(subject, year, "homework");
   app.querySelector("#addForm").onsubmit = e => {
     e.preventDefault();
     const name = app.querySelector("#newName").value.trim();
@@ -424,12 +430,12 @@ function renderMistakes(body, lesson) {
   };
 }
 
-function renderHomework(subject, year) {
+function renderHomework(subject) {
   const s = subjectInfo(subject);
-  const mistakes = homeworkFor(subject, year);
-  setCrumbs([{ label: "Subjects", go: [] }, { label: subject, go: [subject] }, { label: year, go: [subject, year] }, { label: "Homework mistakes" }]);
+  const mistakes = homeworkFor(subject);
+  setCrumbs([{ label: "Subjects", go: [] }, { label: subject, go: [subject] }, { label: "Homework mistakes" }]);
   const names = [...new Set(mistakes.map(m => m.hw).filter(Boolean))];
-  app.innerHTML = `<h2>📝 Homework mistakes</h2><p class="sub">${s.icon} ${subject} · ${year} — everything you got wrong in your homework.</p>
+  app.innerHTML = `<h2>📝 Homework mistakes</h2><p class="sub">${s.icon} ${subject} — everything you got wrong in your homework.</p>
     <div class="toolbar">
       <button class="btn good" id="revise">🧠 Revise homework mistakes (${mistakes.length})</button>
     </div>
