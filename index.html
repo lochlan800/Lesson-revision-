@@ -2,8 +2,17 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Lesson Revision</title>
+<!-- Lets the page be installed as an app on a phone (home screen icon, opens full screen) -->
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#4f6bed">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Revision">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <style>
   :root {
     --bg: #f4f6fb;
@@ -42,6 +51,7 @@
     background: var(--card);
     border-bottom: 1px solid var(--border);
     padding: 14px 16px;
+    padding-top: max(14px, env(safe-area-inset-top));
     position: sticky;
     top: 0;
     z-index: 5;
@@ -138,6 +148,7 @@
   .overlay {
     position: fixed; inset: 0; background: var(--bg); z-index: 20;
     display: flex; flex-direction: column; align-items: center; padding: 20px 16px; overflow-y: auto;
+    padding-top: max(20px, env(safe-area-inset-top)); padding-bottom: max(20px, env(safe-area-inset-bottom));
   }
   .ov-timer { color: var(--muted); font-size: 0.9rem; font-variant-numeric: tabular-nums; margin-left: auto; margin-right: 12px; }
   .card-clock { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--confident); }
@@ -207,6 +218,7 @@
   <div>
     <button class="btn secondary" id="exportBtn">⬇ Back up</button>
     <button class="btn secondary" id="importBtn">⬆ Restore</button>
+    <button class="btn" id="installBtn" hidden>📲 Install app</button>
     <input type="file" id="importFile" accept=".json,application/json" hidden>
   </div>
 </footer>
@@ -1437,6 +1449,37 @@ document.getElementById("importFile").onchange = e => {
 
 render();
 updateLive();
+
+// ---------- Install as an app ----------
+// The offline helper only works when the page comes from a website, not from a file on the device
+if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+  navigator.serviceWorker.register("sw.js").catch(() => {});
+}
+// Ask the browser not to clear saved work when the phone is low on space
+if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+
+const installBtn = document.getElementById("installBtn");
+const installed = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+let installPrompt = null;
+// Android / Chrome / Edge: the browser offers its own install prompt
+addEventListener("beforeinstallprompt", e => {
+  e.preventDefault();
+  installPrompt = e;
+  installBtn.hidden = false;
+});
+addEventListener("appinstalled", () => { installBtn.hidden = true; });
+// iPhone / iPad: there is no prompt, so explain how to do it from Safari's Share menu
+if (!installed && /iphone|ipad|ipod/i.test(navigator.userAgent) && location.protocol.startsWith("http")) installBtn.hidden = false;
+installBtn.onclick = async () => {
+  if (installPrompt) {
+    installPrompt.prompt();
+    await installPrompt.userChoice;
+    installPrompt = null;
+    installBtn.hidden = true;
+  } else {
+    alert("To add Lesson Revision to your home screen:\n\n1. Open this page in Safari\n2. Tap the Share button (the square with an arrow)\n3. Tap 'Add to Home Screen'\n4. Tap 'Add'");
+  }
+};
 </script>
 </body>
 </html>

@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#4f6bed"/>
+  <!-- open book -->
+  <path d="M256 160c-40-28-92-36-140-28v228c48-8 100 0 140 28z" fill="#ffffff"/>
+  <path d="M256 160c40-28 92-36 140-28v228c-48-8-100 0-140 28z" fill="#e3e8ff"/>
+  <path d="M256 160v228" stroke="#4f6bed" stroke-width="8"/>
+  <!-- lines of text -->
+  <g stroke="#4f6bed" stroke-width="10" stroke-linecap="round" opacity="0.55">
+    <path d="M146 196c28-4 58 0 82 10M146 236c28-4 58 0 82 10M146 276c28-4 58 0 82 10"/>
+    <path d="M366 196c-28-4-58 0-82 10M366 236c-28-4-58 0-82 10M366 276c-28-4-58 0-82 10"/>
+  </g>
+  <!-- tick badge -->
+  <circle cx="372" cy="372" r="58" fill="#2e9e5b" stroke="#ffffff" stroke-width="10"/>
+  <path d="M346 372l18 18 34-36" fill="none" stroke="#ffffff" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
