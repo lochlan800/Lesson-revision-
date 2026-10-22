@@ -312,6 +312,11 @@ function renderTopics(subject, year) {
   const topics = topicsFor(subject, year);
   setCrumbs([{ label: "Subjects", go: [] }, { label: subject, go: [subject] }, { label: year }]);
   app.innerHTML = `<h2>${s.icon} ${subject} · ${year}</h2><p class="sub">Add the topics you're studying, then click one to add lessons.</p>
+    <div class="toolbar">
+      <button class="btn good" id="reviseYear">🧠 Revise whole year (${topics.reduce((n, t) => n + t.lessons.reduce((m, l) => m + l.cards.length, 0), 0)} cards)</button>
+      <label class="check"><input type="checkbox" id="incMistakes"> Include things I got wrong</label>
+    </div>
+    <h3 style="margin:0 0 10px">Topics</h3>
     <form class="add-row" id="addForm">
       <input type="text" id="newName" placeholder="New topic, e.g. Algebra" maxlength="80">
       <button class="btn" type="submit">+ Add topic</button>
@@ -333,6 +338,8 @@ function renderTopics(subject, year) {
     tile.onclick = () => go(subject, year, t.id);
     grid.append(tile);
   });
+  app.querySelector("#reviseYear").onclick = () =>
+    startRevise(`${subject} · ${year}`, topics.flatMap(t => t.lessons), app.querySelector("#incMistakes").checked);
   app.querySelector("#addForm").onsubmit = e => {
     e.preventDefault();
     const name = app.querySelector("#newName").value.trim();
@@ -474,7 +481,7 @@ function renderLesson(subject, year, topic, lesson) {
   if (lessonTab === "notes") renderNotes(body, lesson);
   else if (lessonTab === "mistakes") renderMistakes(body, lesson.mistakes, { empty: "Nothing here yet. Log anything you got wrong in this lesson so you can learn from it." });
   else if (lessonTab === "cards") renderCards(body, lesson);
-  else renderReviseTab(body, lesson);
+  else renderReviseTab(body, lesson, topic, subject, year);
 }
 
 // ---------- Notes ----------
@@ -777,20 +784,42 @@ function renderCards(body, lesson) {
   };
 }
 
-function renderReviseTab(body, lesson) {
-  const known = lesson.cards.filter(c => c.known).length;
+// Revise one lesson, the whole topic so far, or every topic in the year
+let reviseScope = "lesson";
+function renderReviseTab(body, lesson, topic, subject, year) {
+  const yearLessons = topicsFor(subject, year).flatMap(t => t.lessons);
+  const scopes = {
+    lesson: { icon: "📄", label: "This lesson",          name: lesson.name,                 lessons: [lesson] },
+    topic:  { icon: "📚", label: "Whole topic so far",   name: topic.name,                  lessons: topic.lessons },
+    year:   { icon: "🎓", label: `Whole of ${year}`,     name: `${subject} · ${year}`,      lessons: yearLessons },
+  };
   body.innerHTML = `<div class="panel">
-      <p style="margin-top:0">You have <b>${plural(lesson.cards.length, "flashcard")}</b> (${known} marked as known)
-      and <b>${plural(lesson.mistakes.length, "mistake")}</b> in this lesson.</p>
-      <p class="hint">Cards are shuffled. Click a card to flip it, then say whether you got it right.</p>
+      <p style="margin-top:0"><b>What do you want to revise?</b></p>
+      <div class="grid" id="scopes" style="margin-bottom:16px"></div>
       <div class="toolbar">
         <label class="check"><input type="checkbox" id="incMistakes" checked> Include things I got wrong</label>
         <label class="check"><input type="checkbox" id="onlyUnknown"> Only cards I don't know yet</label>
       </div>
+      <p class="hint">Cards are shuffled. Click a card to flip it, then say whether you got it right.</p>
       <button class="btn good" id="go">Start revising</button>
     </div>`;
-  body.querySelector("#go").onclick = () =>
-    startRevise(lesson.name, [lesson], body.querySelector("#incMistakes").checked, body.querySelector("#onlyUnknown").checked);
+  const grid = body.querySelector("#scopes");
+  Object.entries(scopes).forEach(([key, sc]) => {
+    const cards = sc.lessons.reduce((n, l) => n + l.cards.length, 0);
+    const mistakes = sc.lessons.reduce((n, l) => n + l.mistakes.length, 0);
+    const tile = document.createElement("div");
+    tile.className = "tile";
+    if (key === reviseScope) tile.style.cssText = "border:2px solid var(--accent);background:rgba(79,107,237,0.08)";
+    tile.innerHTML = `<div class="icon">${sc.icon}</div><div class="name">${sc.label}</div>
+      <div class="meta">${esc(sc.name)}</div>
+      <div class="meta">${plural(cards, "flashcard")} · ${plural(mistakes, "mistake")}${key === "lesson" ? "" : ` · ${plural(sc.lessons.length, "lesson")}`}</div>`;
+    tile.onclick = () => { reviseScope = key; render(); };
+    grid.append(tile);
+  });
+  body.querySelector("#go").onclick = () => {
+    const sc = scopes[reviseScope];
+    startRevise(sc.name, sc.lessons, body.querySelector("#incMistakes").checked, body.querySelector("#onlyUnknown").checked);
+  };
 }
 
 // ---------- Shared bits ----------
