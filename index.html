@@ -76,7 +76,7 @@
   }
   .icon-btn:hover { background: var(--border); color: var(--text); }
   .add-row { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
-  input[type=text], textarea {
+  input[type=text], input[type=date], textarea {
     flex: 1; min-width: 0;
     padding: 10px 12px;
     border: 1px solid var(--border);
@@ -228,11 +228,11 @@ function plural(n, word) { return n + " " + word + (n === 1 ? "" : "s"); }
 // ---------- Routing (uses the URL hash so the back button works) ----------
 function go(...parts) { location.hash = parts.map(encodeURIComponent).join("/"); }
 function route() { return location.hash.slice(1).split("/").filter(Boolean).map(decodeURIComponent); }
-window.addEventListener("hashchange", render);
+window.addEventListener("hashchange", () => { editingId = null; render(); });
 document.getElementById("home").onclick = () => go();
 
 const app = document.getElementById("app");
-let lessonTab = "mistakes";
+let lessonTab = "notes";
 
 function render() {
   const [subject, year, topicId, lessonId] = route();
@@ -367,7 +367,7 @@ function renderLessons(subject, year, topic) {
     tile.innerHTML = `<div class="stripe" style="background:${s.color}"></div>
       <div class="actions"></div>
       <div class="name">${esc(l.name)}</div>
-      <div class="meta">${plural(l.mistakes.length, "mistake")} · ${plural(l.cards.length, "flashcard")}</div>`;
+      <div class="meta">${plural((l.notes || []).length, "note")} · ${plural(l.mistakes.length, "mistake")} · ${plural(l.cards.length, "flashcard")}</div>`;
     tile.querySelector(".actions").append(...editButtons(l, "lesson", () => {
       topic.lessons.splice(topic.lessons.indexOf(l), 1);
     }));
@@ -378,7 +378,7 @@ function renderLessons(subject, year, topic) {
     e.preventDefault();
     const name = app.querySelector("#newName").value.trim();
     if (!name) return;
-    topic.lessons.push({ id: uid(), name, mistakes: [], cards: [] });
+    topic.lessons.push({ id: uid(), name, notes: [], mistakes: [], cards: [] });
     save();
     render();
     app.querySelector("#newName").focus();
@@ -388,95 +388,279 @@ function renderLessons(subject, year, topic) {
 }
 
 function renderLesson(subject, year, topic, lesson) {
+  lesson.notes = lesson.notes || [];
   setCrumbs([{ label: "Subjects", go: [] }, { label: subject, go: [subject] }, { label: year, go: [subject, year] },
     { label: topic.name, go: [subject, year, topic.id] }, { label: lesson.name }]);
   app.innerHTML = `<h2>${esc(lesson.name)}</h2><p class="sub">${subject} · ${year} · ${esc(topic.name)}</p>
     <div class="tabs">
-      <button class="tab" data-tab="mistakes">❌ Things I got wrong (${lesson.mistakes.length})</button>
+      <button class="tab" data-tab="notes">📒 Key notes (${lesson.notes.length})</button>
+      <button class="tab" data-tab="mistakes">❌ Mistakes (${lesson.mistakes.length})</button>
       <button class="tab" data-tab="cards">🗂️ Flashcards (${lesson.cards.length})</button>
       <button class="tab" data-tab="revise">🧠 Revise</button>
     </div>
     <div id="tabBody"></div>`;
   app.querySelectorAll(".tab").forEach(b => {
     b.classList.toggle("active", b.dataset.tab === lessonTab);
-    b.onclick = () => { lessonTab = b.dataset.tab; render(); };
+    b.onclick = () => { lessonTab = b.dataset.tab; editingId = null; render(); };
   });
   const body = app.querySelector("#tabBody");
-  if (lessonTab === "mistakes") renderMistakes(body, lesson);
+  if (lessonTab === "notes") renderNotes(body, lesson);
+  else if (lessonTab === "mistakes") renderMistakes(body, lesson.mistakes, { empty: "Nothing here yet. Log anything you got wrong in this lesson so you can learn from it." });
   else if (lessonTab === "cards") renderCards(body, lesson);
   else renderReviseTab(body, lesson);
 }
 
-function renderMistakes(body, lesson) {
+// ---------- Notes ----------
+// Turns a note into a flashcard. "Word: meaning", "Word - meaning", "x = y", "A → B",
+// "X means Y" and "X is Y" become question/answer; anything else becomes fill-in-the-blank.
+function noteToCard(text) {
+  const t = text.trim();
+  const rules = [
+    { re: /^(.{1,80}?)\s*:\s+([\s\S]+)$/,             q: m => m[1] },
+    { re: /^(.{1,80}?)\s+[-–—]\s+([\s\S]+)$/,         q: m => m[1] },
+    { re: /^(.{1,80}?)\s*(?:→|->|=>)\s*([\s\S]+)$/,   q: m => m[1] },
+    { re: /^(.{1,80}?)\s+means\s+([\s\S]+)$/i,        q: m => `What does "${m[1]}" mean?` },
+    { re: /^(.{1,80}?)\s*=\s*([\s\S]+)$/,             q: m => `${m[1]} = ?` },
+    { re: /^(.{1,60}?)\s+(is|are)\s+([\s\S]+)$/i,     q: m => `What ${m[2].toLowerCase()} ${m[1]}?`, a: m => m[3] },
+  ];
+  for (const r of rules) {
+    const m = t.match(r.re);
+    if (!m) continue;
+    const q = r.q(m).trim(), a = (r.a ? r.a(m) : m[2]).trim();
+    if (q && a) return { q, a };
+  }
+  // Fill in the blank: hide the longest word
+  const words = t.match(/[A-Za-zÀ-ÿ']{4,}/g);
+  if (!words) return null;
+  const word = words.reduce((a, b) => (b.length > a.length ? b : a));
+  return { q: "Fill in the blank:\n" + t.replace(word, "_____"), a: word + "\n\n" + t };
+}
+function syncNoteCard(lesson, note) {
+  const made = noteToCard(note.text);
+  if (!made) return false;
+  const card = lesson.cards.find(c => c.fromNote === note.id);
+  if (card) {
+    if (card.q !== made.q || card.a !== made.a) Object.assign(card, made, { known: false });
+  } else {
+    lesson.cards.push({ id: uid(), q: made.q, a: made.a, known: false, fromNote: note.id });
+  }
+  return true;
+}
+
+function renderNotes(body, lesson) {
+  const editing = lesson.notes.find(n => n.id === editingId);
+  const missing = lesson.notes.filter(n => !lesson.cards.some(c => c.fromNote === n.id)).length;
   body.innerHTML = `<form class="panel" id="form">
-      <div class="form-grid">
-        <div><label>What I got wrong</label><textarea id="wrong" placeholder="e.g. I wrote 3² = 6"></textarea></div>
-        <div><label>The correct answer / how to fix it</label><textarea id="right" placeholder="e.g. 3² = 3 × 3 = 9"></textarea></div>
+      <label class="check" style="margin-bottom:4px">${editing ? "Edit note" : "Key note"}</label>
+      <textarea id="text" placeholder="e.g. Photosynthesis: plants use light to turn CO₂ and water into glucose and oxygen"></textarea>
+      <p class="hint" style="margin:6px 0">💡 Tip: write notes like <b>Word: what it means</b> or <b>Word - what it means</b> to get the best flashcards.
+        Other notes become fill-in-the-blank cards.</p>
+      <div class="toolbar" style="margin:0">
+        <button class="btn" type="submit">${editing ? "Save changes" : "+ Add note"}</button>
+        ${editing ? `<button class="btn secondary" type="button" id="cancel">Cancel</button>` : ""}
+        <label class="check"><input type="checkbox" id="auto" checked> Make a flashcard from this note automatically</label>
       </div>
-      <div style="margin-top:10px"><button class="btn" type="submit">+ Add mistake</button></div>
     </form>
+    ${missing ? `<div class="toolbar"><button class="btn good" id="makeAll">✨ Make flashcards from ${plural(missing, "note")} without one</button></div>` : ""}
     <div id="list"></div>`;
+  const textEl = body.querySelector("#text");
+  if (editing) { textEl.value = editing.text; textEl.focus(); }
   const list = body.querySelector("#list");
-  if (!lesson.mistakes.length) list.innerHTML = `<div class="empty">Nothing here yet. Add anything you got wrong in this lesson so you can learn from it.</div>`;
-  lesson.mistakes.forEach(m => list.append(mistakeItem(m, lesson.mistakes)));
+  if (!lesson.notes.length) list.innerHTML = `<div class="empty">No notes yet. Write down the key points from this lesson.</div>`;
+  lesson.notes.forEach(n => {
+    const hasCard = lesson.cards.some(c => c.fromNote === n.id);
+    const el = document.createElement("div");
+    el.className = "item";
+    el.innerHTML = `<div class="body"><div>${esc(n.text)}</div>
+      <div style="margin-top:6px">${hasCard ? '<span class="badge known">🗂️ flashcard made</span>' : ""}</div></div>`;
+    if (!hasCard) el.append(iconButton("🗂️", "Make flashcard", () => {
+      if (!syncNoteCard(lesson, n)) return alert("Couldn't make a flashcard from that note — try writing it as 'Word: meaning'.");
+      save(); render();
+    }));
+    el.append(
+      iconButton("✏️", "Edit", () => { editingId = n.id; render(); }),
+      iconButton("🗑️", "Delete", () => {
+        if (!confirm("Delete this note? (Any flashcard made from it stays.)")) return;
+        lesson.notes.splice(lesson.notes.indexOf(n), 1);
+        save(); render();
+      }));
+    list.append(el);
+  });
+  if (editing) body.querySelector("#cancel").onclick = () => { editingId = null; render(); };
+  if (missing) body.querySelector("#makeAll").onclick = () => {
+    let made = 0;
+    lesson.notes.forEach(n => { if (!lesson.cards.some(c => c.fromNote === n.id) && syncNoteCard(lesson, n)) made++; });
+    save(); render();
+    alert(`Made ${plural(made, "flashcard")}! Check the Flashcards tab.`);
+  };
   body.querySelector("#form").onsubmit = e => {
     e.preventDefault();
-    const wrong = body.querySelector("#wrong").value.trim();
-    const right = body.querySelector("#right").value.trim();
-    if (!wrong) return body.querySelector("#wrong").focus();
-    lesson.mistakes.push({ id: uid(), wrong, right });
+    const text = textEl.value.trim();
+    if (!text) return textEl.focus();
+    let note = editing;
+    if (note) note.text = text;
+    else lesson.notes.push(note = { id: uid(), text });
+    // Keep an existing note's flashcard up to date when the note is edited
+    if (body.querySelector("#auto").checked || lesson.cards.some(c => c.fromNote === note.id)) syncNoteCard(lesson, note);
+    editingId = null;
+    save(); render();
+    app.querySelector("#text").focus();
+  };
+}
+
+// ---------- Mistakes (used by lessons and homework) ----------
+const CATEGORIES = {
+  dontknow: { label: "Didn't know",          icon: "🤔", color: "#d64545" },
+  silly:    { label: "Silly mistake",        icon: "🙈", color: "#c98a00" },
+  practice: { label: "Needs more practice",  icon: "🔁", color: "#4f6bed" },
+};
+let editingId = null;
+let mistakeFilter = "all";
+let lastHomework = "";
+
+function today() {
+  const d = new Date();
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+function niceDate(iso) {
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
+}
+function catBadge(cat) {
+  const c = CATEGORIES[cat];
+  return c ? `<span class="badge" style="background:${c.color}22;color:${c.color}">${c.icon} ${c.label}</span>` : "";
+}
+
+// opts.homework: true to ask which homework and group by it
+function renderMistakes(body, mistakes, opts) {
+  const editing = mistakes.find(m => m.id === editingId);
+  const names = [...new Set(mistakes.map(m => m.hw).filter(Boolean))];
+  const counts = { all: mistakes.length };
+  Object.keys(CATEGORIES).forEach(k => counts[k] = mistakes.filter(m => m.cat === k).length);
+  body.innerHTML = `<form class="panel" id="form">
+      ${editing ? `<p style="margin:0 0 10px"><b>✏️ Editing mistake</b></p>` : ""}
+      <div class="form-grid">
+        ${opts.homework ? `<div><label>Which homework?</label>
+          <input type="text" id="hw" list="hwNames" placeholder="e.g. Homework 3 – Fractions" maxlength="100" style="width:100%">
+          <datalist id="hwNames">${names.map(n => `<option value="${esc(n)}">`).join("")}</datalist></div>` : ""}
+        <div><label>Day I made the mistake</label><input type="date" id="date" style="width:100%"></div>
+      </div>
+      <label class="check" style="margin:12px 0 6px">What kind of mistake was it?</label>
+      <div class="tabs" id="cats" style="margin-bottom:12px">
+        ${Object.entries(CATEGORIES).map(([k, c]) => `<button type="button" class="tab" data-cat="${k}">${c.icon} ${c.label}</button>`).join("")}
+      </div>
+      <div class="form-grid">
+        <div><label>What I got wrong</label><textarea id="wrong" placeholder="e.g. I wrote 3² = 6"></textarea></div>
+        <div><label>The correct answer</label><textarea id="right" placeholder="e.g. 9"></textarea></div>
+      </div>
+      <div style="margin-top:10px"><label class="check" style="margin-bottom:4px">🤔 How do I work it out? (write the steps so you know how to do it next time)</label>
+        <textarea id="how" placeholder="e.g. Squaring means times the number by itself: 3² = 3 × 3 = 9 (not 3 × 2)"></textarea></div>
+      <div class="toolbar" style="margin:10px 0 0">
+        <button class="btn" type="submit">${editing ? "Save changes" : "+ Add mistake"}</button>
+        ${editing ? `<button class="btn secondary" type="button" id="cancel">Cancel</button>` : ""}
+      </div>
+    </form>
+    <div class="tabs" id="filters">
+      <button class="tab" data-filter="all">All (${counts.all})</button>
+      ${Object.entries(CATEGORIES).map(([k, c]) => `<button class="tab" data-filter="${k}">${c.icon} ${c.label} (${counts[k]})</button>`).join("")}
+    </div>
+    <div id="list"></div>`;
+
+  const $ = sel => body.querySelector(sel);
+  let cat = editing ? editing.cat : null;
+  const showCat = () => body.querySelectorAll("#cats .tab").forEach(b => b.classList.toggle("active", b.dataset.cat === cat));
+  body.querySelectorAll("#cats .tab").forEach(b => b.onclick = () => { cat = cat === b.dataset.cat ? null : b.dataset.cat; showCat(); });
+  showCat();
+  $("#date").value = editing ? (editing.date || "") : today();
+  if (opts.homework) $("#hw").value = editing ? (editing.hw || "") : lastHomework;
+  if (editing) {
+    $("#wrong").value = editing.wrong; $("#right").value = editing.right || ""; $("#how").value = editing.how || "";
+    $("#cancel").onclick = () => { editingId = null; render(); };
+    $("#form").scrollIntoView({ block: "start" });
+  }
+
+  if (!counts[mistakeFilter] && mistakeFilter !== "all") mistakeFilter = "all";
+  body.querySelectorAll("#filters .tab").forEach(b => {
+    b.classList.toggle("active", b.dataset.filter === mistakeFilter);
+    b.onclick = () => { mistakeFilter = b.dataset.filter; render(); };
+  });
+
+  const list = $("#list");
+  const shown = mistakes.filter(m => mistakeFilter === "all" || m.cat === mistakeFilter);
+  if (!mistakes.length) list.innerHTML = `<div class="empty">${opts.empty}</div>`;
+  // Newest first
+  const sorted = shown.map((m, i) => [m, i]).sort((a, b) => (b[0].date || "").localeCompare(a[0].date || "") || b[1] - a[1]).map(x => x[0]);
+  if (opts.homework) {
+    const groups = new Map();
+    sorted.forEach(m => {
+      const key = m.hw || "Other homework";
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(m);
+    });
+    groups.forEach((items, name) => {
+      const h = document.createElement("h3");
+      h.style.margin = "18px 0 8px";
+      h.textContent = `${name} (${items.length})`;
+      list.append(h, ...items.map(m => mistakeItem(m, mistakes)));
+    });
+  } else {
+    sorted.forEach(m => list.append(mistakeItem(m, mistakes)));
+  }
+
+  $("#form").onsubmit = e => {
+    e.preventDefault();
+    const fields = {
+      date: $("#date").value,
+      cat,
+      wrong: $("#wrong").value.trim(),
+      right: $("#right").value.trim(),
+      how: $("#how").value.trim(),
+    };
+    if (!fields.wrong) return $("#wrong").focus();
+    if (!fields.cat) return alert("Pick what kind of mistake it was: Didn't know, Silly mistake or Needs more practice.");
+    if (opts.homework) fields.hw = lastHomework = $("#hw").value.trim();
+    if (editing) Object.assign(editing, fields);
+    else mistakes.push({ id: uid(), ...fields });
+    editingId = null;
     save(); render();
     app.querySelector("#wrong").focus();
   };
+}
+
+function mistakeItem(m, owner) {
+  const el = document.createElement("div");
+  el.className = "item";
+  el.innerHTML = `<div class="body">
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
+        ${m.date ? `<span class="badge">📅 ${niceDate(m.date)}</span>` : ""}${catBadge(m.cat)}
+      </div>
+      <div class="label wrong">Got wrong</div><div>${esc(m.wrong)}</div>
+      ${m.right ? `<div class="label right" style="margin-top:8px">Correct answer</div><div>${esc(m.right)}</div>` : ""}
+      ${m.how ? `<div class="label" style="margin-top:8px">🤔 How to work it out</div><div>${esc(m.how)}</div>`
+              : `<div class="hint" style="margin:8px 0 0">⚠️ How do you work it out? Tap ✏️ to add the steps.</div>`}
+    </div>`;
+  el.append(
+    iconButton("✏️", "Edit", () => { editingId = m.id; render(); }),
+    iconButton("🗑️", "Delete", () => {
+      if (!confirm("Delete this mistake?")) return;
+      owner.splice(owner.indexOf(m), 1);
+      save(); render();
+    }));
+  return el;
 }
 
 function renderHomework(subject) {
   const s = subjectInfo(subject);
   const mistakes = homeworkFor(subject);
   setCrumbs([{ label: "Subjects", go: [] }, { label: subject, go: [subject] }, { label: "Homework mistakes" }]);
-  const names = [...new Set(mistakes.map(m => m.hw).filter(Boolean))];
   app.innerHTML = `<h2>📝 Homework mistakes</h2><p class="sub">${s.icon} ${subject} — everything you got wrong in your homework.</p>
     <div class="toolbar">
       <button class="btn good" id="revise">🧠 Revise homework mistakes (${mistakes.length})</button>
     </div>
-    <form class="panel" id="form">
-      <label class="check" style="margin-bottom:4px">Which homework?</label>
-      <input type="text" id="hw" list="hwNames" placeholder="e.g. Homework 3 – Fractions" maxlength="100" style="width:100%;margin-bottom:10px">
-      <datalist id="hwNames">${names.map(n => `<option value="${esc(n)}">`).join("")}</datalist>
-      <div class="form-grid">
-        <div><label>What I got wrong</label><textarea id="wrong" placeholder="e.g. I forgot to simplify 4/8"></textarea></div>
-        <div><label>The correct answer / how to fix it</label><textarea id="right" placeholder="e.g. 4/8 = 1/2"></textarea></div>
-      </div>
-      <div style="margin-top:10px"><button class="btn" type="submit">+ Add mistake</button></div>
-    </form>
-    <div id="list"></div>`;
-  const list = app.querySelector("#list");
-  if (!mistakes.length) list.innerHTML = `<div class="empty">No homework mistakes yet. Add anything you got wrong in your homework above.</div>`;
-  // Group by homework name, newest homework first
-  const groups = new Map();
-  mistakes.slice().reverse().forEach(m => {
-    const key = m.hw || "Other homework";
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).unshift(m);
-  });
-  groups.forEach((items, name) => {
-    const h = document.createElement("h3");
-    h.style.margin = "18px 0 8px";
-    h.textContent = `${name} (${items.length})`;
-    list.append(h, ...items.map(m => mistakeItem(m, mistakes)));
-  });
-  app.querySelector("#form").onsubmit = e => {
-    e.preventDefault();
-    const hw = app.querySelector("#hw").value.trim();
-    const wrong = app.querySelector("#wrong").value.trim();
-    const right = app.querySelector("#right").value.trim();
-    if (!wrong) return app.querySelector("#wrong").focus();
-    mistakes.push({ id: uid(), hw, wrong, right });
-    save(); render();
-    // Keep the homework name filled in so several mistakes can be added in a row
-    app.querySelector("#hw").value = hw;
-    app.querySelector("#wrong").focus();
-  };
+    <div id="section"></div>`;
+  renderMistakes(app.querySelector("#section"), mistakes,
+    { homework: true, empty: "No homework mistakes yet. Add anything you got wrong in your homework above." });
   app.querySelector("#revise").onclick = () =>
     startRevise("Homework mistakes", [{ cards: [], mistakes }], true);
 }
@@ -552,29 +736,6 @@ function iconButton(symbol, title, onClick) {
   b.onclick = e => { e.stopPropagation(); onClick(); };
   return b;
 }
-function mistakeItem(m, owner) {
-  const el = document.createElement("div");
-  el.className = "item";
-  el.innerHTML = `<div class="body">
-      <div class="label wrong">Got wrong</div><div>${esc(m.wrong)}</div>
-      ${m.right ? `<div class="label right" style="margin-top:8px">Correct</div><div>${esc(m.right)}</div>` : ""}
-    </div>`;
-  const edit = iconButton("✏️", "Edit", () => {
-    const wrong = prompt("What you got wrong:", m.wrong);
-    if (wrong === null || !wrong.trim()) return;
-    const right = prompt("The correct answer:", m.right);
-    if (right === null) return;
-    m.wrong = wrong.trim(); m.right = right.trim();
-    save(); render();
-  });
-  const del = iconButton("🗑️", "Delete", () => {
-    if (!confirm("Delete this mistake?")) return;
-    owner.splice(owner.indexOf(m), 1);
-    save(); render();
-  });
-  el.append(edit, del);
-  return el;
-}
 function editButtons(obj, kind, remove) {
   return [
     iconButton("✏️", "Rename", () => {
@@ -603,7 +764,11 @@ function startRevise(title, lessons, includeMistakes, onlyUnknown = false) {
   lessons.forEach(l => {
     l.cards.forEach(c => { if (!onlyUnknown || !c.known) deck.push({ kind: "card", front: c.q, back: c.a, ref: c }); });
     if (includeMistakes) l.mistakes.forEach(m => deck.push({
-      kind: "mistake", front: m.wrong, back: m.right || "(no correction written yet)", ref: null,
+      kind: "mistake",
+      front: m.wrong,
+      back: (m.right || "(no correct answer written yet)") + (m.how ? "\n\nHow to work it out:\n" + m.how : ""),
+      cat: m.cat,
+      ref: null,
     }));
   });
   if (!deck.length) {
@@ -628,7 +793,9 @@ function runDeck(title, deck) {
     if (i >= deck.length) return finish();
     const card = deck[i];
     flipped = false;
-    const frontTag = card.kind === "mistake" ? "❌ What I got wrong — what's the right answer?" : "Question";
+    const cat = CATEGORIES[card.cat];
+    const frontTag = card.kind === "mistake"
+      ? `❌ ${cat ? cat.icon + " " + cat.label + " — " : ""}what's the right answer, and how do you work it out?` : "Question";
     const backTag = card.kind === "mistake" ? "✅ Correct answer" : "Answer";
     overlay.innerHTML = `
       <div class="top"><b>🧠 ${esc(title)}</b><button class="btn secondary" id="exit">✕ Exit</button></div>
