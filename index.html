@@ -14,6 +14,8 @@
     --accent: #4f6bed;
     --danger: #d64545;
     --good: #2e9e5b;
+    --confident: #2a78d6;
+    --improving: #eb6834;
     --shadow: 0 2px 8px rgba(20, 30, 60, 0.08);
   }
   @media (prefers-color-scheme: dark) {
@@ -23,6 +25,8 @@
       --text: #e8ebf2;
       --muted: #9aa3b5;
       --border: #2c3340;
+      --confident: #3987e5;
+      --improving: #d95926;
       --shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
     }
   }
@@ -171,6 +175,14 @@
   .week .col:hover .bar { opacity: 0.85; }
   .week .target { position: absolute; left: 0; right: 0; border-top: 1.5px dashed var(--muted); pointer-events: none; }
   .week .target span { position: absolute; left: 0; bottom: 2px; font-size: 0.75rem; color: var(--muted); background: var(--card); padding: 0 4px; border-radius: 4px; }
+  .week .col.stack { flex-direction: column; justify-content: flex-end; align-items: center; gap: 2px; }
+  .week .seg { width: 100%; max-width: 36px; }
+  .week .seg:first-child { border-radius: 4px 4px 0 0; }
+  .week .col.stack:hover .seg { filter: brightness(1.1); }
+  .legend { display: flex; gap: 12px; font-size: 0.8rem; color: var(--muted); }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+  .badge.level-confident { background: rgba(42, 120, 214, 0.15); color: var(--text); }
+  .badge.level-improving { background: rgba(235, 104, 52, 0.15); color: var(--text); }
   .week .labels { display: flex; gap: 8px; margin-top: 6px; }
   .week .labels span { flex: 1; text-align: center; font-size: 0.8rem; color: var(--muted); }
   .week .labels span.today { color: var(--text); font-weight: 600; }
@@ -539,7 +551,7 @@ function syncCard(lesson, source, id, made) {
   if (!made) return false;
   const card = lesson.cards.find(c => c[source] === id);
   if (card) {
-    if (card.q !== made.q || card.a !== made.a) Object.assign(card, made, { known: false });
+    if (card.q !== made.q || card.a !== made.a) Object.assign(card, made, { known: false, level: null });
   } else {
     lesson.cards.push({ id: uid(), q: made.q, a: made.a, known: false, [source]: id });
   }
@@ -811,7 +823,7 @@ function renderCards(body, lesson) {
     const el = document.createElement("div");
     el.className = "item";
     el.innerHTML = `<div class="body">
-        <div class="label">Front ${c.known ? '<span class="badge known">✓ known</span> ' : ""}${c.fromNote ? '<span class="badge">📒 from notes</span>' : c.fromMistake ? '<span class="badge">❌ from a mistake</span>' : ""}</div><div>${esc(c.q)}</div>
+        <div class="label">Front ${levelBadge(c.level)}${c.fromNote ? '<span class="badge">📒 from notes</span>' : c.fromMistake ? '<span class="badge">❌ from a mistake</span>' : ""}</div><div>${esc(c.q)}</div>
         <div class="label" style="margin-top:8px">Back</div><div>${esc(c.a)}</div>
       </div>`;
     const edit = iconButton("✏️", "Edit", () => {
@@ -855,7 +867,7 @@ function renderReviseTab(body, lesson, topic, subject, year) {
       <div class="grid" id="scopes" style="margin-bottom:16px"></div>
       <div class="toolbar">
         <label class="check"><input type="checkbox" id="incMistakes" checked> Include things I got wrong</label>
-        <label class="check"><input type="checkbox" id="onlyUnknown"> Only cards I don't know yet</label>
+        <label class="check"><input type="checkbox" id="onlyUnknown"> Only cards I'm not confident with yet</label>
       </div>
       <p class="hint">Cards are shuffled. Click a card to flip it, then say whether you got it right.</p>
       <button class="btn good" id="go">Start revising</button>
@@ -915,18 +927,18 @@ let overlay = null;
 function startRevise(title, lessons, includeMistakes, onlyUnknown = false) {
   let deck = [];
   lessons.forEach(l => {
-    l.cards.forEach(c => { if (!onlyUnknown || !c.known) deck.push({ kind: "card", front: c.q, back: c.a, ref: c }); });
+    l.cards.forEach(c => { if (!onlyUnknown || c.level !== "confident") deck.push({ kind: "card", front: c.q, back: c.a, ref: c }); });
     // Mistakes already turned into flashcards are in the deck above, so don't add them twice
     if (includeMistakes) l.mistakes.filter(m => !l.cards.some(c => c.fromMistake === m.id)).forEach(m => deck.push({
       kind: "mistake",
       front: m.wrong,
       back: (m.right || "(no correct answer written yet)") + (m.how ? "\n\nHow to work it out:\n" + m.how : ""),
       cat: m.cat,
-      ref: null,
+      ref: m,
     }));
   });
   if (!deck.length) {
-    alert(onlyUnknown ? "You know all of these cards already — nice! Untick 'Only cards I don't know yet' to go again."
+    alert(onlyUnknown ? "You're confident with all of these cards already — nice! Untick 'Only cards I'm not confident with yet' to go again."
                       : "There's nothing to revise yet. Add some flashcards first!");
     return;
   }
@@ -941,7 +953,9 @@ function runDeck(title, deck) {
   document.body.style.overflow = "hidden";
   let i = 0;
   const missed = [];
+  const tally = { confident: 0, improving: 0 };
   let flipped = false;
+  let shownAt = 0, thinkSeconds = null;
 
   function show() {
     if (i >= deck.length) return finish();
@@ -970,16 +984,26 @@ function runDeck(title, deck) {
     overlay.querySelector("#fc").onclick = flip;
     overlay.querySelector("#yes").onclick = () => answer(true);
     overlay.querySelector("#no").onclick = () => answer(false);
+    shownAt = Date.now();
+    thinkSeconds = null;
   }
   function flip() {
     flipped = !flipped;
     overlay.querySelector("#fc").classList.toggle("flipped", flipped);
     overlay.querySelector("#btns").style.visibility = "visible";
-    overlay.querySelector("#hint").textContent = "Did you get it right? (← still learning · → got it)";
+    // The time to the first flip is how long you needed to think of the answer
+    if (thinkSeconds === null) thinkSeconds = (Date.now() - shownAt) / 1000;
+    overlay.querySelector("#hint").innerHTML = `⏱️ You took <b>${thinkSeconds.toFixed(1)}s</b> — got it in under ${CONFIDENT_SECONDS}s counts as ⚡ confident.<br>Did you get it right? (← still learning · → got it)`;
   }
   function answer(gotIt) {
     const card = deck[i];
-    if (card.ref) card.ref.known = gotIt;
+    const level = gotIt && thinkSeconds <= CONFIDENT_SECONDS ? "confident" : "improving";
+    tally[level]++;
+    if (card.ref) {
+      // Only the latest go counts, so a card you used to get wrong becomes confident once you know it well
+      Object.assign(card.ref, { known: gotIt, level, lastSeconds: Math.round(thinkSeconds * 10) / 10 });
+      logCardResult(card.ref.id, level);
+    }
     if (!gotIt) missed.push(card);
     save();
     i++;
@@ -993,6 +1017,8 @@ function runDeck(title, deck) {
       <div class="result">
         <div class="big">${score} / ${deck.length}</div>
         <p style="font-size:1.2rem">${msg}</p>
+        <p>${levelBadge("confident")} <b>${tally.confident}</b> &nbsp; ${levelBadge("improving")} <b>${tally.improving}</b></p>
+        <p class="hint">Confident = got it right in under ${CONFIDENT_SECONDS} seconds.</p>
         <div class="answer-btns" style="justify-content:center;flex-wrap:wrap">
           ${missed.length ? `<button class="btn" id="again">🔁 Revise the ${missed.length} I missed</button>` : ""}
           <button class="btn secondary" id="all">Start over</button>
@@ -1086,10 +1112,74 @@ function todayParts() {
   return { now, msg, pct, recMsg };
 }
 
+// ---------- Flashcard confidence ----------
+// Each go at a card is rated: right in under CONFIDENT_SECONDS = confident, otherwise improving.
+// data.stats.cards["2026-10-22"] = { cardId: "confident" | "improving" } (your latest go at each card that day)
+const CONFIDENT_SECONDS = 10;
+const LEVELS = {
+  confident: { icon: "⚡", label: "Confident", css: "var(--confident)" },
+  improving: { icon: "📈", label: "Improving", css: "var(--improving)" },
+};
+function levelBadge(level) {
+  const l = LEVELS[level];
+  return l ? `<span class="badge level-${level}">${l.icon} ${l.label}</span> ` : "";
+}
+function cardLog() {
+  data.stats = data.stats || {};
+  data.stats.cards = data.stats.cards || {};
+  return data.stats.cards;
+}
+function logCardResult(id, level) {
+  const log = cardLog();
+  (log[today()] = log[today()] || {})[id] = level;
+}
+function dayLevels(day) {
+  const counts = { confident: 0, improving: 0 };
+  Object.values(cardLog()[day] || {}).forEach(l => counts[l]++);
+  return counts;
+}
+// Where every flashcard stands right now, across all subjects
+function allCardLevels() {
+  const counts = { confident: 0, improving: 0, untried: 0 };
+  SUBJECTS.forEach(s => Object.values(data[s.name] || {}).forEach(topics => topics.forEach(t => t.lessons.forEach(l =>
+    l.cards.forEach(c => counts[LEVELS[c.level] ? c.level : "untried"]++)))));
+  return counts;
+}
+
+function renderCardChart(box) {
+  const list = Array.from({ length: 7 }, (_, i) => addDays(today(), i - 6));
+  const perDay = list.map(dayLevels);
+  const max = Math.max(5, ...perDay.map(c => c.confident + c.improving));
+  box.innerHTML = `<div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:10px">
+      <span style="color:var(--muted);font-size:0.85rem">Flashcards each day — last 7 days</span>
+      <span class="legend"><span><i style="background:var(--confident)"></i>⚡ Confident</span><span><i style="background:var(--improving)"></i>📈 Improving</span></span>
+    </div>
+    <div class="bars"></div><div class="labels"></div>`;
+  const bars = box.querySelector(".bars"), labels = box.querySelector(".labels");
+  list.forEach((d, i) => {
+    const c = perDay[i];
+    const col = document.createElement("div");
+    col.className = "col stack" + (d === today() ? " today" : "");
+    // Improving on top, confident at the base
+    col.innerHTML = ["improving", "confident"].filter(k => c[k]).map(k =>
+      `<div class="seg" style="height:${(c[k] / max) * 100}%;background:${LEVELS[k].css}"></div>`).join("");
+    col.onmousemove = e => showTip(e, `${d === today() ? "Today" : niceDate(d)}: ⚡ ${c.confident} confident · 📈 ${c.improving} improving`);
+    col.onmouseleave = hideTip;
+    bars.append(col);
+    const lab = document.createElement("span");
+    lab.textContent = d === today() ? "Today" : niceDate(d).split(",")[0];
+    if (d === today()) lab.className = "today";
+    labels.append(lab);
+  });
+}
+
 function renderStats(box) {
   const st = streaks();
   const t = todayParts();
   const rec = record();
+  const todayCards = dayLevels(today());
+  const all = allCardLevels();
+  const totalCards = all.confident + all.improving + all.untried;
   const streakMsg = st.todayCounts ? "✅ Today counts — nice work!"
     : st.current ? "Study for 1 minute today to keep it going!"
     : "Study for 1 minute to start a streak!";
@@ -1101,8 +1191,22 @@ function renderStats(box) {
       <div class="stat"><div class="k">🏆 Record day</div><div class="v">${rec.day ? fmtTime(rec.sec) : "—"}</div>
         <div class="s">${rec.day ? niceDate(rec.day) : ""}</div><div class="s" id="recMsg">${t.recMsg}</div></div>
     </div>
+    <div class="stats">
+      <div class="stat"><div class="k">🧠 Flashcards today</div>
+        <div class="v"><span style="color:var(--text)">⚡ ${todayCards.confident}</span> <span style="font-size:1rem;font-weight:400;color:var(--muted)">confident</span>
+          &nbsp;<span>📈 ${todayCards.improving}</span> <span style="font-size:1rem;font-weight:400;color:var(--muted)">improving</span></div>
+        <div class="s">Got it right in under ${CONFIDENT_SECONDS}s = confident. Your latest go at a card is what counts.</div></div>
+      <div class="stat"><div class="k">🗂️ All your flashcards</div>
+        <div class="v" style="font-size:1.4rem">⚡ ${all.confident} · 📈 ${all.improving} · 🆕 ${all.untried}</div>
+        <div class="s">confident · improving · not tried yet</div>
+        <div class="meter" style="display:flex;gap:2px;background:none">${["confident", "improving"].map(k =>
+          `<div style="width:${totalCards ? (all[k] / totalCards) * 100 : 0}%;background:${LEVELS[k].css}"></div>`).join("")}
+          <div style="flex:1;background:var(--border)"></div></div></div>
+    </div>
     <div class="week"><div class="k" style="color:var(--muted);font-size:0.85rem;margin-bottom:10px">Minutes studied — last 7 days</div>
-      <div class="bars" id="bars"></div><div class="labels" id="labels"></div></div>`;
+      <div class="bars" id="bars"></div><div class="labels" id="labels"></div></div>
+    <div class="week" id="cardChart"></div>`;
+  renderCardChart(box.querySelector("#cardChart"));
   const days = studyDays();
   const list = Array.from({ length: 7 }, (_, i) => addDays(today(), i - 6));
   const max = Math.max(STREAK_SECONDS * 5, ...list.map(d => days[d] || 0));
