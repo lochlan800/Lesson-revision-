@@ -139,6 +139,9 @@
     position: fixed; inset: 0; background: var(--bg); z-index: 20;
     display: flex; flex-direction: column; align-items: center; padding: 20px 16px; overflow-y: auto;
   }
+  .ov-timer { color: var(--muted); font-size: 0.9rem; font-variant-numeric: tabular-nums; margin-left: auto; margin-right: 12px; }
+  .card-clock { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--confident); }
+  .card-clock.slow { color: var(--improving); }
   .overlay .top { width: 100%; max-width: 640px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
   .progress { width: 100%; max-width: 640px; height: 8px; background: var(--border); border-radius: 999px; overflow: hidden; margin-bottom: 20px; }
   .progress div { height: 100%; background: var(--accent); transition: width 0.2s; }
@@ -966,9 +969,9 @@ function runDeck(title, deck) {
       ? `❌ ${cat ? cat.icon + " " + cat.label + " — " : ""}what's the right answer, and how do you work it out?` : "Question";
     const backTag = card.kind === "mistake" ? "✅ Correct answer" : "Answer";
     overlay.innerHTML = `
-      <div class="top"><b>🧠 ${esc(title)}</b><button class="btn secondary" id="exit">✕ Exit</button></div>
+      <div class="top"><b>🧠 ${esc(title)}</b><span class="ov-timer" id="ovTimer">${dailyTimerText()}</span><button class="btn secondary" id="exit">✕ Exit</button></div>
       <div class="progress"><div style="width:${(i / deck.length) * 100}%"></div></div>
-      <div class="hint">Card ${i + 1} of ${deck.length}</div>
+      <div class="hint">Card ${i + 1} of ${deck.length} · <span class="card-clock" id="cardClock">⏱️ 0.0s</span></div>
       <div class="flashcard" id="fc">
         <div class="inner">
           <div class="face"><span class="tag">${frontTag}</span>${esc(card.front)}</div>
@@ -987,12 +990,25 @@ function runDeck(title, deck) {
     shownAt = Date.now();
     thinkSeconds = null;
   }
+  // Live stopwatch for the current card; it stops when you flip the card
+  overlay.clock = setInterval(() => {
+    const el = overlay && overlay.querySelector("#cardClock");
+    if (!el || thinkSeconds !== null) return;
+    const sec = (Date.now() - shownAt) / 1000;
+    el.textContent = `⏱️ ${sec.toFixed(1)}s`;
+    el.classList.toggle("slow", sec > CONFIDENT_SECONDS);
+  }, 100);
   function flip() {
     flipped = !flipped;
     overlay.querySelector("#fc").classList.toggle("flipped", flipped);
     overlay.querySelector("#btns").style.visibility = "visible";
     // The time to the first flip is how long you needed to think of the answer
-    if (thinkSeconds === null) thinkSeconds = (Date.now() - shownAt) / 1000;
+    if (thinkSeconds === null) {
+      thinkSeconds = (Date.now() - shownAt) / 1000;
+      const el = overlay.querySelector("#cardClock");
+      el.textContent = `⏱️ ${thinkSeconds.toFixed(1)}s`;
+      el.classList.toggle("slow", thinkSeconds > CONFIDENT_SECONDS);
+    }
     overlay.querySelector("#hint").innerHTML = `⏱️ You took <b>${thinkSeconds.toFixed(1)}s</b> — got it in under ${CONFIDENT_SECONDS}s counts as ⚡ confident.<br>Did you get it right? (← still learning · → got it)`;
   }
   function answer(gotIt) {
@@ -1010,6 +1026,7 @@ function runDeck(title, deck) {
     show();
   }
   function finish() {
+    clearInterval(overlay.clock);
     const score = deck.length - missed.length;
     const pct = Math.round((score / deck.length) * 100);
     const msg = pct === 100 ? "Perfect! 🎉" : pct >= 70 ? "Great work! 💪" : pct >= 40 ? "Good effort — keep going! 📈" : "Keep practising — you'll get there! 🌱";
@@ -1044,6 +1061,7 @@ function runDeck(title, deck) {
 function closeRevise() {
   if (!overlay) return;
   document.removeEventListener("keydown", overlay.keyHandler);
+  clearInterval(overlay.clock);
   overlay.remove();
   overlay = null;
   document.body.style.overflow = "";
@@ -1249,10 +1267,16 @@ function showTip(e, text) {
 }
 function hideTip() { tip.style.display = "none"; }
 
+function dailyTimerText() {
+  return `🔥 ${streaks().current}  ·  ⏱️ ${fmtTime(studyDays()[today()] || 0)} today`;
+}
+
 function updateLive() {
   const st = streaks();
   const now = studyDays()[today()] || 0;
-  document.getElementById("hdrStats").textContent = `🔥 ${st.current}  ·  ⏱️ ${fmtTime(now)} today`;
+  document.getElementById("hdrStats").textContent = dailyTimerText();
+  const ov = document.getElementById("ovTimer");
+  if (ov) ov.textContent = dailyTimerText();
   const box = document.getElementById("statsBox");
   if (!box) return;
   // Re-draw everything when something other than today's timer changes (streak, a new day, bar scale)
