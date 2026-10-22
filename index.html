@@ -479,7 +479,7 @@ function renderLesson(subject, year, topic, lesson) {
   });
   const body = app.querySelector("#tabBody");
   if (lessonTab === "notes") renderNotes(body, lesson);
-  else if (lessonTab === "mistakes") renderMistakes(body, lesson.mistakes, { empty: "Nothing here yet. Log anything you got wrong in this lesson so you can learn from it." });
+  else if (lessonTab === "mistakes") renderMistakes(body, lesson.mistakes, { lesson, empty: "Nothing here yet. Log anything you got wrong in this lesson so you can learn from it." });
   else if (lessonTab === "cards") renderCards(body, lesson);
   else renderReviseTab(body, lesson, topic, subject, year);
 }
@@ -509,16 +509,28 @@ function noteToCard(text) {
   const word = words.reduce((a, b) => (b.length > a.length ? b : a));
   return { q: "Fill in the blank:\n" + t.replace(word, "_____"), a: word + "\n\n" + t };
 }
-function syncNoteCard(lesson, note) {
-  const made = noteToCard(note.text);
+// Adds or updates the lesson flashcard linked to a note or mistake (source = "fromNote" / "fromMistake")
+function syncCard(lesson, source, id, made) {
   if (!made) return false;
-  const card = lesson.cards.find(c => c.fromNote === note.id);
+  const card = lesson.cards.find(c => c[source] === id);
   if (card) {
     if (card.q !== made.q || card.a !== made.a) Object.assign(card, made, { known: false });
   } else {
-    lesson.cards.push({ id: uid(), q: made.q, a: made.a, known: false, fromNote: note.id });
+    lesson.cards.push({ id: uid(), q: made.q, a: made.a, known: false, [source]: id });
   }
   return true;
+}
+function syncNoteCard(lesson, note) {
+  return syncCard(lesson, "fromNote", note.id, noteToCard(note.text));
+}
+function mistakeToCard(m) {
+  return {
+    q: `❌ I got this wrong:\n${m.wrong}\n\nWhat's the right answer${m.how ? " – and how do you work it out" : ""}?`,
+    a: (m.right || "(no correct answer written yet)") + (m.how ? "\n\nHow to work it out:\n" + m.how : ""),
+  };
+}
+function syncMistakeCard(lesson, m) {
+  return syncCard(lesson, "fromMistake", m.id, mistakeToCard(m));
 }
 
 function renderNotes(body, lesson) {
@@ -612,6 +624,8 @@ function renderMistakes(body, mistakes, opts) {
   const names = [...new Set(mistakes.map(m => m.hw).filter(Boolean))];
   const counts = { all: mistakes.length };
   Object.keys(CATEGORIES).forEach(k => counts[k] = mistakes.filter(m => m.cat === k).length);
+  const hasCard = m => opts.lesson && opts.lesson.cards.some(c => c.fromMistake === m.id);
+  const missing = opts.lesson ? mistakes.filter(m => !hasCard(m)).length : 0;
   body.innerHTML = `<form class="panel" id="form">
       ${editing ? `<p style="margin:0 0 10px"><b>✏️ Editing mistake</b></p>` : ""}
       <div class="form-grid">
@@ -633,8 +647,10 @@ function renderMistakes(body, mistakes, opts) {
       <div class="toolbar" style="margin:10px 0 0">
         <button class="btn" type="submit">${editing ? "Save changes" : "+ Add mistake"}</button>
         ${editing ? `<button class="btn secondary" type="button" id="cancel">Cancel</button>` : ""}
+        ${opts.lesson ? `<label class="check"><input type="checkbox" id="auto" checked> Make a flashcard from this mistake automatically</label>` : ""}
       </div>
     </form>
+    ${missing ? `<div class="toolbar"><button class="btn good" id="makeAll">✨ Make flashcards from ${plural(missing, "mistake")} without one</button></div>` : ""}
     <div class="tabs" id="filters">
       <button class="tab" data-filter="all">All (${counts.all})</button>
       ${Object.entries(CATEGORIES).map(([k, c]) => `<button class="tab" data-filter="${k}">${c.icon} ${c.label} (${counts[k]})</button>`).join("")}
@@ -679,8 +695,14 @@ function renderMistakes(body, mistakes, opts) {
       list.append(h, ...items.map(m => mistakeItem(m, mistakes)));
     });
   } else {
-    sorted.forEach(m => list.append(mistakeItem(m, mistakes)));
+    sorted.forEach(m => list.append(mistakeItem(m, mistakes, opts.lesson)));
   }
+  if (missing) $("#makeAll").onclick = () => {
+    let made = 0;
+    mistakes.forEach(m => { if (!hasCard(m) && syncMistakeCard(opts.lesson, m)) made++; });
+    save(); render();
+    alert(`Made ${plural(made, "flashcard")}! Check the Flashcards tab.`);
+  };
 
   $("#form").onsubmit = e => {
     e.preventDefault();
@@ -694,30 +716,40 @@ function renderMistakes(body, mistakes, opts) {
     if (!fields.wrong) return $("#wrong").focus();
     if (!fields.cat) return alert("Pick what kind of mistake it was: Didn't know, Silly mistake or Needs more practice.");
     if (opts.homework) fields.hw = lastHomework = $("#hw").value.trim();
-    if (editing) Object.assign(editing, fields);
-    else mistakes.push({ id: uid(), ...fields });
+    let m = editing;
+    if (m) Object.assign(m, fields);
+    else mistakes.push(m = { id: uid(), ...fields });
+    // Keep an existing mistake's flashcard up to date when the mistake is edited
+    if (opts.lesson && ($("#auto").checked || hasCard(m))) syncMistakeCard(opts.lesson, m);
     editingId = null;
     save(); render();
     app.querySelector("#wrong").focus();
   };
 }
 
-function mistakeItem(m, owner) {
+// lesson is given for lesson mistakes, which can have a linked flashcard
+function mistakeItem(m, owner, lesson) {
+  const hasCard = lesson && lesson.cards.some(c => c.fromMistake === m.id);
   const el = document.createElement("div");
   el.className = "item";
   el.innerHTML = `<div class="body">
       <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
         ${m.date ? `<span class="badge">📅 ${niceDate(m.date)}</span>` : ""}${catBadge(m.cat)}
+        ${hasCard ? '<span class="badge known">🗂️ flashcard made</span>' : ""}
       </div>
       <div class="label wrong">Got wrong</div><div>${esc(m.wrong)}</div>
       ${m.right ? `<div class="label right" style="margin-top:8px">Correct answer</div><div>${esc(m.right)}</div>` : ""}
       ${m.how ? `<div class="label" style="margin-top:8px">🤔 How to work it out</div><div>${esc(m.how)}</div>`
               : `<div class="hint" style="margin:8px 0 0">⚠️ How do you work it out? Tap ✏️ to add the steps.</div>`}
     </div>`;
+  if (lesson && !hasCard) el.append(iconButton("🗂️", "Make flashcard", () => {
+    syncMistakeCard(lesson, m);
+    save(); render();
+  }));
   el.append(
     iconButton("✏️", "Edit", () => { editingId = m.id; render(); }),
     iconButton("🗑️", "Delete", () => {
-      if (!confirm("Delete this mistake?")) return;
+      if (!confirm("Delete this mistake? (Any flashcard made from it stays.)")) return;
       owner.splice(owner.indexOf(m), 1);
       save(); render();
     }));
@@ -754,7 +786,7 @@ function renderCards(body, lesson) {
     const el = document.createElement("div");
     el.className = "item";
     el.innerHTML = `<div class="body">
-        <div class="label">Front ${c.known ? '<span class="badge known">✓ known</span>' : ""}</div><div>${esc(c.q)}</div>
+        <div class="label">Front ${c.known ? '<span class="badge known">✓ known</span> ' : ""}${c.fromNote ? '<span class="badge">📒 from notes</span>' : c.fromMistake ? '<span class="badge">❌ from a mistake</span>' : ""}</div><div>${esc(c.q)}</div>
         <div class="label" style="margin-top:8px">Back</div><div>${esc(c.a)}</div>
       </div>`;
     const edit = iconButton("✏️", "Edit", () => {
@@ -859,7 +891,8 @@ function startRevise(title, lessons, includeMistakes, onlyUnknown = false) {
   let deck = [];
   lessons.forEach(l => {
     l.cards.forEach(c => { if (!onlyUnknown || !c.known) deck.push({ kind: "card", front: c.q, back: c.a, ref: c }); });
-    if (includeMistakes) l.mistakes.forEach(m => deck.push({
+    // Mistakes already turned into flashcards are in the deck above, so don't add them twice
+    if (includeMistakes) l.mistakes.filter(m => !l.cards.some(c => c.fromMistake === m.id)).forEach(m => deck.push({
       kind: "mistake",
       front: m.wrong,
       back: (m.right || "(no correct answer written yet)") + (m.how ? "\n\nHow to work it out:\n" + m.how : ""),
