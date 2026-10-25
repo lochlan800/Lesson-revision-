@@ -25,6 +25,7 @@
     --good: #2e9e5b;
     --confident: #2a78d6;
     --improving: #eb6834;
+    --sea: #cfe3fb;
     --shadow: 0 2px 8px rgba(20, 30, 60, 0.08);
   }
   @media (prefers-color-scheme: dark) {
@@ -36,6 +37,7 @@
       --border: #2c3340;
       --confident: #3987e5;
       --improving: #d95926;
+      --sea: #1d3a5c;
       --shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
     }
   }
@@ -201,6 +203,40 @@
   .week .labels span { flex: 1; text-align: center; font-size: 0.8rem; color: var(--muted); }
   .week .labels span.today { color: var(--text); font-weight: 600; }
   .tip { position: fixed; pointer-events: none; background: var(--text); color: var(--bg); font-size: 0.8rem; padding: 4px 8px; border-radius: 6px; z-index: 30; display: none; white-space: nowrap; }
+
+  /* Games */
+  .game { width: 100%; max-width: 640px; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .status { min-height: 46px; text-align: center; font-size: 1.05rem; display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 6px; }
+  .qmodal { position: fixed; inset: 0; background: rgba(10, 15, 30, 0.5); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 25; }
+  .qcard { background: var(--card); border-radius: 18px; padding: 20px; width: 100%; max-width: 520px; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3); text-align: center; max-height: 90vh; overflow-y: auto; }
+  .qtag { font-size: 0.8rem; color: var(--muted); }
+  .game-result { width: 100%; display: flex; justify-content: center; }
+  .game-result .qcard { box-shadow: var(--shadow); border: 2px solid var(--accent); padding: 14px; }
+  .qfront { font-size: 1.3rem; white-space: pre-wrap; word-break: break-word; margin: 12px 0; }
+  .qback { font-size: 1.15rem; white-space: pre-wrap; word-break: break-word; border-top: 1px solid var(--border); padding-top: 12px; margin-bottom: 8px; }
+  .sl-board { display: grid; grid-template-columns: repeat(10, 1fr); width: 100%; max-width: 520px; aspect-ratio: 1; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .sl-cell { position: relative; background: var(--card); font-size: 0.6rem; color: var(--muted); padding: 2px 3px; display: flex; flex-direction: column; line-height: 1.1; overflow: hidden; }
+  .sl-cell.alt { background: var(--bg); }
+  .sl-cell .mark { font-size: 0.85rem; }
+  .sl-cell .mark small { font-size: 0.55rem; color: var(--muted); }
+  @media (max-width: 480px) { .sl-cell .mark small { display: none; } }
+  .sl-cell .tokens { position: absolute; right: 1px; bottom: 0; font-size: clamp(0.8rem, 3.2vw, 1.25rem); }
+  .ttt { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; width: min(330px, 90%); aspect-ratio: 1; }
+  .ttt button { font-size: 2.6rem; background: var(--card); border: 2px solid var(--border); border-radius: 14px; cursor: pointer; color: var(--text); }
+  .ttt button:not(:disabled):hover { border-color: var(--accent); }
+  .ttt button.win { background: rgba(46, 158, 91, 0.2); border-color: var(--good); }
+  .c4 { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; padding: 8px; background: var(--accent); border-radius: 14px; width: min(460px, 100%); }
+  .c4 .slot { aspect-ratio: 1; border-radius: 50%; background: var(--bg); cursor: pointer; }
+  .c4 .slot.you { background: #e5484d; }
+  .c4 .slot.cpu { background: #f5c400; }
+  .c4 .slot.win { box-shadow: 0 0 0 4px #fff inset; }
+  .bs { display: grid; grid-template-columns: repeat(8, 1fr); gap: 3px; width: min(400px, 100%); }
+  .bs.small { width: min(240px, 65%); }
+  .bs .sq { aspect-ratio: 1; background: var(--sea); border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: clamp(0.7rem, 3vw, 1.1rem); color: var(--muted); }
+  .bs .sq.open { cursor: pointer; }
+  .bs .sq.open:hover { outline: 2px solid var(--accent); }
+  .bs .sq.ship { background: var(--muted); }
+  .bs .sq.sunk { background: rgba(214, 69, 69, 0.35); }
 
   footer { text-align: center; color: var(--muted); font-size: 0.85rem; padding: 10px 16px 30px; }
   footer button { margin: 4px; }
@@ -482,6 +518,7 @@ function renderTopic(subject, year, topic) {
       <button class="tab" data-tab="mistakes">❌ Mistakes (${topic.mistakes.length})</button>
       <button class="tab" data-tab="cards">🗂️ Flashcards (${topic.cards.length})</button>
       <button class="tab" data-tab="revise">🧠 Revise</button>
+      <button class="tab" data-tab="games">🎲 Games</button>
       <button class="tab" data-tab="links">🔗 Links (${topic.links.length})</button>
     </div>
     <div id="tabBody"></div>`;
@@ -494,6 +531,7 @@ function renderTopic(subject, year, topic) {
   else if (topicTab === "mistakes") renderMistakes(body, topic.mistakes, { topic, empty: "Nothing here yet. Log anything you got wrong in this topic so you can learn from it." });
   else if (topicTab === "cards") renderCards(body, topic);
   else if (topicTab === "links") renderLinks(body, topic);
+  else if (topicTab === "games") renderGamesTab(body, topic, subject, year);
   else renderReviseTab(body, topic, subject, year);
 }
 
@@ -919,6 +957,18 @@ function schedule(item, level, gotIt, isMistake) {
   if (isMistake && days > 1) days = Math.ceil(days / 2);
   item.srs = { box: next, due: addDays(today(), days) };
 }
+// Saves the result of one go at a card (used by revision rounds and the games) and returns its level
+function recordAnswer(item, gotIt, thinkSeconds) {
+  const level = gotIt && thinkSeconds <= CONFIDENT_SECONDS ? "confident" : "improving";
+  if (item.ref) {
+    // Only the latest go counts, so a card you used to get wrong becomes confident once you know it well
+    Object.assign(item.ref, { known: gotIt, level, lastSeconds: Math.round(thinkSeconds * 10) / 10 });
+    logCardResult(item.ref.id, level);
+    schedule(item.ref, level, gotIt, item.isMistake);
+  }
+  save();
+  return level;
+}
 function dueText(item) {
   if (!item.srs) return "🆕 new";
   if (item.srs.due <= today()) return "📅 due today";
@@ -1061,22 +1111,15 @@ function runDeck(title, deck, opts = {}) {
   }
   function answer(gotIt) {
     const card = deck[i];
-    const level = gotIt && thinkSeconds <= CONFIDENT_SECONDS ? "confident" : "improving";
+    const level = recordAnswer(card, gotIt, thinkSeconds);
     tally[level]++;
     tally.answered++;
     if (gotIt) tally.right++;
-    if (card.ref) {
-      // Only the latest go counts, so a card you used to get wrong becomes confident once you know it well
-      Object.assign(card.ref, { known: gotIt, level, lastSeconds: Math.round(thinkSeconds * 10) / 10 });
-      logCardResult(card.ref.id, level);
-      schedule(card.ref, level, gotIt, card.isMistake);
-    }
     if (!gotIt) {
       if (!missed.includes(card)) missed.push(card);
       // Spaced repetition: a card you got wrong comes back again a few cards later
       if (opts.spaced) deck.splice(Math.min(i + 4, deck.length), 0, card);
     }
-    save();
     i++;
     show();
   }
@@ -1121,6 +1164,499 @@ function closeRevise() {
   overlay.remove();
   overlay = null;
   document.body.style.overflow = "";
+}
+
+// ---------- Revision board games ----------
+// Every move needs a flashcard answered right first. Answers count just like in a revision round
+// (confident / improving, spaced repetition, the study timer). You play against the computer,
+// which "knows" each answer with a chance set by the difficulty.
+const GAMES = {
+  snakes:  { icon: "🐍", name: "Snakes & Ladders",  about: "Answer to roll the dice. Land on a ladder and answer to climb it; land on a snake and answer to escape it. First to 100 wins." },
+  noughts: { icon: "⭕", name: "Noughts & Crosses", about: "Pick a square, then answer to claim it. Three in a row wins." },
+  connect: { icon: "🔴", name: "Connect Four",      about: "Pick a column, then answer to drop your counter. Four in a row wins." },
+  battle:  { icon: "🚢", name: "Battleships",       about: "Pick a square to fire at, then answer to take the shot. Sink all the computer's ships first." },
+};
+const DIFFICULTY = {
+  easy:   { label: "😊 Easy",   skill: 0.45 },
+  medium: { label: "🙂 Medium", skill: 0.65 },
+  hard:   { label: "😤 Hard",   skill: 0.85 },
+};
+let gameChoice = "snakes", gameScope = "topic", gameLevel = "medium";
+
+function renderGamesTab(body, topic, subject, year) {
+  const scopes = {
+    topic: { label: "📚 This topic",       name: topic.name,             topics: [topic] },
+    year:  { label: `🎓 Whole of ${year}`, name: `${subject} · ${year}`, topics: topicsFor(subject, year) },
+  };
+  body.innerHTML = `<div class="panel">
+      <p style="margin-top:0"><b>Pick a game</b> — you play against the computer, and every move needs a flashcard answered right.</p>
+      <div class="grid" id="gameTiles" style="margin-bottom:16px"></div>
+      <label class="check" style="margin-bottom:6px">Questions from</label>
+      <div class="tabs" id="gameScope" style="margin-bottom:12px">${Object.entries(scopes).map(([k, sc]) =>
+        `<button class="tab" data-v="${k}">${sc.label}</button>`).join("")}</div>
+      <label class="check" style="margin-bottom:6px">How good is the computer?</label>
+      <div class="tabs" id="gameLevel" style="margin-bottom:16px">${Object.entries(DIFFICULTY).map(([k, d]) =>
+        `<button class="tab" data-v="${k}">${d.label}</button>`).join("")}</div>
+      <button class="btn good" id="play">🎲 Play ${GAMES[gameChoice].name}</button>
+    </div>`;
+  const grid = body.querySelector("#gameTiles");
+  Object.entries(GAMES).forEach(([key, g]) => {
+    const tile = document.createElement("div");
+    tile.className = "tile";
+    if (key === gameChoice) tile.style.cssText = "border:2px solid var(--accent);background:rgba(79,107,237,0.08)";
+    tile.innerHTML = `<div class="icon">${g.icon}</div><div class="name">${g.name}</div><div class="meta">${g.about}</div>`;
+    tile.onclick = () => { gameChoice = key; render(); };
+    grid.append(tile);
+  });
+  body.querySelectorAll("#gameScope .tab").forEach(b => {
+    b.classList.toggle("active", b.dataset.v === gameScope);
+    b.onclick = () => { gameScope = b.dataset.v; render(); };
+  });
+  body.querySelectorAll("#gameLevel .tab").forEach(b => {
+    b.classList.toggle("active", b.dataset.v === gameLevel);
+    b.onclick = () => { gameLevel = b.dataset.v; render(); };
+  });
+  body.querySelector("#play").onclick = () => {
+    const sc = scopes[gameScope];
+    const items = deckItems(sc.topics, true, false);
+    if (!items.length) return alert("There's nothing to ask yet. Add some flashcards or mistakes to this topic first!");
+    startGame(gameChoice, items, gameLevel, sc.name);
+  };
+}
+
+// Picks the next question: mistakes and improving cards come up most, and nothing repeats too soon
+function questionPicker(items) {
+  const recent = [];
+  const weight = it => (it.isMistake || it.ref.level === "improving" ? 3 : !it.ref.level ? 2 : 1);
+  return () => {
+    const pool = items.filter(it => !recent.includes(it));
+    const from = pool.length ? pool : items;
+    let r = Math.random() * from.reduce((n, it) => n + weight(it), 0);
+    const pick = from.find(it => (r -= weight(it)) < 0) || from[0];
+    recent.push(pick);
+    while (recent.length > Math.min(5, items.length - 1)) recent.shift();
+    return pick;
+  };
+}
+
+function startGame(kind, items, levelKey, title) {
+  closeRevise();
+  overlay = document.createElement("div");
+  overlay.className = "overlay";
+  document.body.append(overlay);
+  document.body.style.overflow = "hidden";
+  const me = overlay;
+  overlay.innerHTML = `
+    <div class="top"><b>${GAMES[kind].icon} ${GAMES[kind].name}</b><span class="ov-timer" id="ovTimer">${dailyTimerText()}</span><button class="btn secondary" id="exit">✕ Exit</button></div>
+    <div class="game game-live"><div class="status" id="gStatus"></div><div id="gBoard" style="width:100%;display:flex;flex-direction:column;align-items:center;gap:12px"></div></div>`;
+  overlay.querySelector("#exit").onclick = () => { closeRevise(); render(); };
+  const game = {
+    asked: 0, right: 0,
+    board: overlay.querySelector("#gBoard"),
+    next: questionPicker(items),
+    alive: () => overlay === me,
+    status: html => { const el = me.querySelector("#gStatus"); if (el) el.innerHTML = html; },
+    // Waits, but never carries on once the game has been closed
+    wait: ms => new Promise(r => setTimeout(() => { if (overlay === me) r(); }, ms)),
+    cpuKnows: () => Math.random() < DIFFICULTY[levelKey].skill,
+    ask: why => askQuestion(game, game.next(), why),
+    // Shows a button under the status line and waits for it to be pressed
+    button: label => new Promise(r => {
+      const b = document.createElement("button");
+      b.className = "btn good";
+      b.style.marginLeft = "8px";
+      b.textContent = label;
+      b.onclick = () => { b.remove(); r(); };
+      me.querySelector("#gStatus").append(b);
+      b.focus();
+    }),
+    end: result => endGame(game, result, () => startGame(kind, items, levelKey, title)),
+  };
+  ({ snakes: playSnakes, noughts: playNoughts, connect: playConnect, battle: playBattle })[kind](game);
+}
+
+// The flashcard pop-up used by every game. Resolves true if you got it right.
+function askQuestion(game, item, why) {
+  return new Promise(resolve => {
+    const box = document.createElement("div");
+    box.className = "qmodal";
+    const mistake = item.kind === "mistake";
+    box.innerHTML = `<div class="qcard">
+        <div class="hint" style="margin:0 0 10px"><b>${why}</b></div>
+        <div class="qtag">${mistake ? "❌ I got this wrong — what's the right answer?" : "Question"} · <span class="card-clock" id="qClock">⏱️ 0.0s</span></div>
+        <div class="qfront">${esc(item.front)}</div>
+        <div class="qback" hidden><div class="qtag">${mistake ? "✅ Correct answer" : "Answer"}</div>${esc(item.back)}</div>
+        <div class="answer-btns" style="justify-content:center;flex-wrap:wrap">
+          <button class="btn" id="qShow">Show answer</button>
+          <button class="btn danger" id="qNo" hidden>✗ Still learning</button>
+          <button class="btn good" id="qYes" hidden>✓ Got it</button>
+        </div>
+        <div class="hint" id="qHint" style="margin:10px 0 0">Think of the answer, then tap Show answer (or press Space)</div>
+      </div>`;
+    overlay.querySelector(".game").append(box);
+    const $ = sel => box.querySelector(sel);
+    const shownAt = Date.now();
+    let secs = null;
+    const clock = setInterval(() => {
+      if (!box.isConnected) return clearInterval(clock);
+      if (secs !== null) return;
+      const t = (Date.now() - shownAt) / 1000;
+      $("#qClock").textContent = `⏱️ ${t.toFixed(1)}s`;
+      $("#qClock").classList.toggle("slow", t > CONFIDENT_SECONDS);
+    }, 100);
+    const reveal = () => {
+      if (secs !== null) return;
+      secs = (Date.now() - shownAt) / 1000;
+      $("#qClock").textContent = `⏱️ ${secs.toFixed(1)}s`;
+      $("#qClock").classList.toggle("slow", secs > CONFIDENT_SECONDS);
+      $(".qback").hidden = false;
+      $("#qShow").hidden = true;
+      $("#qNo").hidden = $("#qYes").hidden = false;
+      $("#qHint").textContent = "Did you get it right? (← still learning · → got it)";
+    };
+    const finish = gotIt => {
+      clearInterval(clock);
+      document.removeEventListener("keydown", keys);
+      recordAnswer(item, gotIt, secs);
+      game.asked++;
+      if (gotIt) game.right++;
+      box.remove();
+      resolve(gotIt);
+    };
+    const keys = e => {
+      if (!box.isConnected) return document.removeEventListener("keydown", keys);
+      if (e.key === " " || e.key === "Enter") { e.preventDefault(); reveal(); }
+      else if (secs !== null && e.key === "ArrowRight") finish(true);
+      else if (secs !== null && e.key === "ArrowLeft") finish(false);
+    };
+    document.addEventListener("keydown", keys);
+    $("#qShow").onclick = reveal;
+    $("#qYes").onclick = () => finish(true);
+    $("#qNo").onclick = () => finish(false);
+  });
+}
+
+function endGame(game, result, playAgain) {
+  if (!game.alive()) return;
+  overlay.querySelector(".game").classList.remove("game-live");
+  const text = { win: ["🏆", "You win!"], lose: ["🤖", "The computer wins this time"], draw: ["🤝", "It's a draw!"] }[result];
+  // Shown above the board (not over it) so you can still see how the game finished
+  const box = document.createElement("div");
+  box.className = "game-result";
+  box.innerHTML = `<div class="qcard">
+      <div style="font-size:3rem">${text[0]}</div>
+      <h2 style="margin:6px 0">${text[1]}</h2>
+      <p>You answered <b>${game.right} of ${plural(game.asked, "question")}</b> right.</p>
+      <div class="answer-btns" style="justify-content:center;flex-wrap:wrap">
+        <button class="btn good" id="again">🔁 Play again</button>
+        <button class="btn secondary" id="done">Done</button>
+      </div>
+    </div>`;
+  overlay.querySelector(".game").prepend(box);
+  overlay.querySelector("#gStatus").remove();
+  box.scrollIntoView({ block: "start" });
+  box.querySelector("#again").onclick = playAgain;
+  box.querySelector("#done").onclick = () => { closeRevise(); render(); };
+}
+
+// Lines of `need` in a row on a rows × cols grid; cells are indexed row * cols + col
+function lines(rows, cols, need) {
+  const out = [];
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++)
+    [[0, 1], [1, 0], [1, 1], [1, -1]].forEach(([dr, dc]) => {
+      const line = [];
+      for (let k = 0; k < need; k++) {
+        const rr = r + dr * k, cc = c + dc * k;
+        if (rr < 0 || rr >= rows || cc < 0 || cc >= cols) return;
+        line.push(rr * cols + cc);
+      }
+      out.push(line);
+    });
+  return out;
+}
+function winner(cells, allLines) {
+  const line = allLines.find(l => cells[l[0]] && l.every(i => cells[i] === cells[l[0]]));
+  return line ? { who: cells[line[0]], line } : null;
+}
+function randomOf(list) { return list[Math.floor(Math.random() * list.length)]; }
+
+// ---------- Snakes & Ladders ----------
+const SNAKES  = { 16: 6, 47: 26, 49: 11, 56: 53, 62: 19, 64: 60, 87: 24, 93: 73, 95: 75, 98: 78 };
+const LADDERS = { 1: 38, 4: 14, 9: 31, 21: 42, 28: 84, 36: 44, 51: 67, 71: 91, 80: 100 };
+
+async function playSnakes(game) {
+  const pos = { you: 0, cpu: 0 };
+  const who = { you: "🧑 You", cpu: "🤖 Computer" };
+  game.board.innerHTML = `<div class="sl-board"></div>
+    <div class="hint" style="margin:0">🧑 You: <b id="slYou">start</b> · 🤖 Computer: <b id="slCpu">start</b> · 🪜 ladder up · 🐍 snake down</div>`;
+  const grid = game.board.querySelector(".sl-board");
+  // Square 1 is bottom-left and the numbers snake back and forth up the board
+  for (let row = 9; row >= 0; row--) for (let col = 0; col < 10; col++) {
+    const n = row * 10 + (row % 2 ? 10 - col : col + 1);
+    const cell = document.createElement("div");
+    cell.className = "sl-cell" + ((row + col) % 2 ? " alt" : "");
+    cell.dataset.n = n;
+    if (LADDERS[n]) cell.title = `Ladder up to ${LADDERS[n]}`;
+    if (SNAKES[n]) cell.title = `Snake down to ${SNAKES[n]}`;
+    // On a phone the small "↑38" labels are hidden, so tapping a square says where it goes
+    if (cell.title) cell.onclick = () => game.status(`${LADDERS[n] ? "🪜" : "🐍"} Square ${n}: ${cell.title.toLowerCase()}`);
+    cell.innerHTML = `<span>${n}</span>${LADDERS[n] ? `<span class="mark">🪜<small>↑${LADDERS[n]}</small></span>` : ""}${SNAKES[n] ? `<span class="mark">🐍<small>↓${SNAKES[n]}</small></span>` : ""}<span class="tokens"></span>`;
+    grid.append(cell);
+  }
+  const draw = () => {
+    grid.querySelectorAll(".tokens").forEach(t => t.textContent = "");
+    ["you", "cpu"].forEach(p => {
+      const cell = grid.querySelector(`[data-n="${pos[p]}"] .tokens`);
+      if (cell) cell.textContent += p === "you" ? "🧑" : "🤖";
+    });
+    game.board.querySelector("#slYou").textContent = pos.you || "start";
+    game.board.querySelector("#slCpu").textContent = pos.cpu || "start";
+  };
+  draw();
+  const roll = async () => {
+    for (let k = 0; k < 6; k++) { game.status(`🎲 ${1 + Math.floor(Math.random() * 6)}`); await game.wait(80); }
+    return 1 + Math.floor(Math.random() * 6);
+  };
+  let turn = "you";
+  while (true) {
+    const you = turn === "you";
+    let ok;
+    if (you) {
+      game.status("Your turn!");
+      await game.button("🎲 Answer to roll");
+      ok = await game.ask("Get it right to roll the dice 🎲");
+    } else {
+      game.status("🤖 The computer is answering a question…");
+      await game.wait(900);
+      ok = game.cpuKnows();
+    }
+    if (!ok) {
+      game.status(you ? "❌ Not this time — no roll for you." : "🤖 The computer got its question wrong — no roll!");
+      await game.wait(1300);
+    } else {
+      const n = await roll();
+      const target = pos[turn] + n;
+      if (target > 100) {
+        game.status(`🎲 ${who[turn]} rolled a <b>${n}</b> — you need exactly ${100 - pos[turn]} to finish, so no move.`);
+        await game.wait(1500);
+      } else {
+        game.status(`🎲 ${who[turn]} rolled a <b>${n}</b>!`);
+        for (let k = 0; k < n; k++) { pos[turn]++; draw(); await game.wait(160); }
+        const ladder = LADDERS[pos[turn]], snake = SNAKES[pos[turn]];
+        if (ladder || snake) {
+          let right;
+          if (you) right = await game.ask(ladder ? `🪜 A ladder to ${ladder}! Get it right to climb it` : `🐍 A snake down to ${snake}! Get it right to escape it`);
+          else { game.status(`🤖 The computer landed on a ${ladder ? "ladder 🪜" : "snake 🐍"} and is answering…`); await game.wait(1000); right = game.cpuKnows(); }
+          if (ladder && right) { pos[turn] = ladder; game.status(`🪜 ${who[turn]} climbed to <b>${ladder}</b>!`); }
+          else if (ladder) game.status(`🪜 ${who[turn]} missed the ladder.`);
+          else if (right) game.status(`🐍 ${who[turn]} escaped the snake!`);
+          else { pos[turn] = snake; game.status(`🐍 ${who[turn]} slid down to <b>${snake}</b>.`); }
+          draw();
+          await game.wait(1400);
+        } else {
+          await game.wait(500);
+        }
+        if (pos[turn] === 100) return game.end(you ? "win" : "lose");
+      }
+    }
+    turn = you ? "cpu" : "you";
+  }
+}
+
+// ---------- Noughts & Crosses ----------
+async function playNoughts(game) {
+  const cells = Array(9).fill(null);
+  const LINES = lines(3, 3, 3);
+  game.board.innerHTML = `<div class="ttt"></div><div class="hint" style="margin:0">You are ✖️ · the computer is ⭕</div>`;
+  const grid = game.board.querySelector(".ttt");
+  let pick = null;
+  const draw = (highlight = []) => {
+    grid.innerHTML = "";
+    cells.forEach((v, i) => {
+      const b = document.createElement("button");
+      b.textContent = v === "X" ? "✖️" : v === "O" ? "⭕" : "";
+      if (highlight.includes(i)) b.classList.add("win");
+      b.disabled = !!v;
+      b.onclick = () => { if (pick && !cells[i]) { const r = pick; pick = null; r(i); } };
+      grid.append(b);
+    });
+  };
+  // Computer: win if it can, block you, then centre, corners, anything
+  const cpuMove = () => {
+    const free = cells.map((v, i) => (v ? null : i)).filter(i => i !== null);
+    for (const mark of ["O", "X"]) for (const i of free) {
+      const test = cells.slice(); test[i] = mark;
+      if (winner(test, LINES)) return i;
+    }
+    if (!cells[4]) return 4;
+    const corners = [0, 2, 6, 8].filter(i => !cells[i]);
+    return corners.length ? randomOf(corners) : randomOf(free);
+  };
+  let turn = "you";
+  draw();
+  while (true) {
+    if (turn === "you") {
+      game.status("Your turn — tap a square to claim");
+      const i = await new Promise(r => { pick = r; });
+      if (await game.ask("Get it right to claim the square ✖️")) { cells[i] = "X"; game.status("✖️ Square claimed!"); }
+      else game.status("❌ Missed it — the square stays empty.");
+    } else {
+      game.status("🤖 The computer is answering a question…");
+      await game.wait(900);
+      const i = cpuMove();
+      if (game.cpuKnows()) { cells[i] = "O"; game.status("🤖 The computer claimed a square ⭕"); }
+      else game.status("🤖 The computer got its question wrong!");
+    }
+    const w = winner(cells, LINES);
+    draw(w ? w.line : []);
+    if (w) { await game.wait(1000); return game.end(w.who === "X" ? "win" : "lose"); }
+    if (cells.every(Boolean)) { await game.wait(800); return game.end("draw"); }
+    await game.wait(900);
+    turn = turn === "you" ? "cpu" : "you";
+  }
+}
+
+// ---------- Connect Four ----------
+async function playConnect(game) {
+  const ROWS = 6, COLS = 7;
+  const cells = Array(ROWS * COLS).fill(null);
+  const LINES = lines(ROWS, COLS, 4);
+  game.board.innerHTML = `<div class="c4"></div><div class="hint" style="margin:0">You are <span style="color:#e5484d">●</span> red · the computer is <span style="color:#d4a400">●</span> yellow</div>`;
+  const grid = game.board.querySelector(".c4");
+  let pick = null;
+  const lowest = col => { for (let r = ROWS - 1; r >= 0; r--) if (!cells[r * COLS + col]) return r * COLS + col; return -1; };
+  const draw = (highlight = []) => {
+    grid.innerHTML = "";
+    cells.forEach((v, i) => {
+      const d = document.createElement("div");
+      d.className = "slot" + (v ? " " + v : "") + (highlight.includes(i) ? " win" : "");
+      d.onclick = () => { const col = i % COLS; if (pick && lowest(col) >= 0) { const r = pick; pick = null; r(col); } };
+      grid.append(d);
+    });
+  };
+  // Computer: win if it can, block you, otherwise prefer the middle columns
+  const cpuMove = () => {
+    const open = [...Array(COLS).keys()].filter(c => lowest(c) >= 0);
+    for (const mark of ["cpu", "you"]) for (const c of open) {
+      const test = cells.slice(); test[lowest(c)] = mark;
+      if (winner(test, LINES)) return c;
+    }
+    const weighted = open.flatMap(c => Array(4 - Math.abs(3 - c)).fill(c));
+    return randomOf(weighted);
+  };
+  let turn = "you";
+  draw();
+  while (true) {
+    if (turn === "you") {
+      game.status("Your turn — tap a column to drop your counter");
+      const col = await new Promise(r => { pick = r; });
+      if (await game.ask("Get it right to drop your counter 🔴")) { cells[lowest(col)] = "you"; game.status("🔴 Counter dropped!"); }
+      else game.status("❌ Missed it — no counter this turn.");
+    } else {
+      game.status("🤖 The computer is answering a question…");
+      await game.wait(900);
+      const col = cpuMove();
+      if (game.cpuKnows()) { cells[lowest(col)] = "cpu"; game.status("🤖 The computer dropped a counter 🟡"); }
+      else game.status("🤖 The computer got its question wrong!");
+    }
+    const w = winner(cells, LINES);
+    draw(w ? w.line : []);
+    if (w) { await game.wait(1000); return game.end(w.who === "you" ? "win" : "lose"); }
+    if (cells.every(Boolean)) { await game.wait(800); return game.end("draw"); }
+    await game.wait(900);
+    turn = turn === "you" ? "cpu" : "you";
+  }
+}
+
+// ---------- Battleships ----------
+const BS_SIZE = 8, BS_SHIPS = [4, 3, 3, 2];
+function placeShips() {
+  const ships = [];
+  const taken = new Set();
+  BS_SHIPS.forEach(len => {
+    while (true) {
+      const across = Math.random() < 0.5;
+      const r = Math.floor(Math.random() * (across ? BS_SIZE : BS_SIZE - len + 1));
+      const c = Math.floor(Math.random() * (across ? BS_SIZE - len + 1 : BS_SIZE));
+      const squares = [...Array(len).keys()].map(k => (across ? r * BS_SIZE + c + k : (r + k) * BS_SIZE + c));
+      if (squares.some(i => taken.has(i))) continue;
+      squares.forEach(i => taken.add(i));
+      ships.push(squares);
+      break;
+    }
+  });
+  return ships;
+}
+
+async function playBattle(game) {
+  const fleets = { you: placeShips(), cpu: placeShips() };
+  const shots = { you: new Set(), cpu: new Set() }; // squares each side has fired at
+  const shipAt = (side, i) => fleets[side].find(s => s.includes(i));
+  const sunk = (side, ship) => ship.every(i => shots[side === "you" ? "cpu" : "you"].has(i));
+  const allSunk = side => fleets[side].every(s => sunk(side, s));
+  game.board.innerHTML = `<div class="hint" style="margin:0"><b>The computer's sea</b> — tap a square to fire</div>
+    <div class="bs" id="enemy"></div>
+    <div class="hint" style="margin:0"><b>Your ships</b></div>
+    <div class="bs small" id="mine"></div>
+    <div class="hint" style="margin:0">💥 hit · • miss · ships: ${BS_SHIPS.join(", ")} squares long</div>`;
+  let pick = null;
+  const draw = () => {
+    const enemy = game.board.querySelector("#enemy"), mine = game.board.querySelector("#mine");
+    enemy.innerHTML = mine.innerHTML = "";
+    for (let i = 0; i < BS_SIZE * BS_SIZE; i++) {
+      const e = document.createElement("div");
+      const eShip = shipAt("cpu", i);
+      e.className = "sq" + (shots.you.has(i) ? (eShip ? (sunk("cpu", eShip) ? " sunk" : " hit") : " miss") : " open");
+      e.textContent = shots.you.has(i) ? (eShip ? "💥" : "•") : "";
+      e.onclick = () => { if (pick && !shots.you.has(i)) { const r = pick; pick = null; r(i); } };
+      enemy.append(e);
+      const m = document.createElement("div");
+      const mShip = shipAt("you", i);
+      m.className = "sq" + (mShip ? " ship" : "") + (shots.cpu.has(i) ? (mShip ? " hit" : " miss") : "");
+      m.textContent = shots.cpu.has(i) ? (mShip ? "💥" : "•") : "";
+      mine.append(m);
+    }
+  };
+  // Computer: fire next to a hit it hasn't finished sinking, otherwise anywhere on a checkerboard
+  const cpuTarget = () => {
+    const free = i => i >= 0 && i < BS_SIZE * BS_SIZE && !shots.cpu.has(i);
+    const hits = [...shots.cpu].filter(i => { const s = shipAt("you", i); return s && !sunk("you", s); });
+    const near = hits.flatMap(i => {
+      const r = Math.floor(i / BS_SIZE), c = i % BS_SIZE;
+      return [r > 0 ? i - BS_SIZE : -1, r < BS_SIZE - 1 ? i + BS_SIZE : -1, c > 0 ? i - 1 : -1, c < BS_SIZE - 1 ? i + 1 : -1];
+    }).filter(free);
+    if (near.length) return randomOf(near);
+    const open = [...Array(BS_SIZE * BS_SIZE).keys()].filter(free);
+    const checker = open.filter(i => (Math.floor(i / BS_SIZE) + i) % 2 === 0);
+    return randomOf(checker.length ? checker : open);
+  };
+  const fire = (side, i) => {
+    shots[side].add(i);
+    const target = side === "you" ? "cpu" : "you";
+    const ship = shipAt(target, i);
+    draw();
+    if (!ship) return "🌊 Miss!";
+    return sunk(target, ship) ? `💥 Hit — and a ${ship.length}-square ship is <b>sunk</b>!` : "💥 Hit!";
+  };
+  let turn = "you";
+  draw();
+  while (true) {
+    if (turn === "you") {
+      game.status("Your turn — tap a square on the computer's sea");
+      const i = await new Promise(r => { pick = r; });
+      if (await game.ask("Get it right to fire 🚀")) game.status(fire("you", i));
+      else game.status("❌ Missed the question — your shot goes wide.");
+      if (allSunk("cpu")) { await game.wait(1000); return game.end("win"); }
+    } else {
+      game.status("🤖 The computer is answering a question…");
+      await game.wait(900);
+      if (game.cpuKnows()) game.status("🤖 The computer fires… " + fire("cpu", cpuTarget()));
+      else game.status("🤖 The computer got its question wrong — no shot!");
+      if (allSunk("you")) { await game.wait(1000); return game.end("lose"); }
+    }
+    await game.wait(1300);
+    turn = turn === "you" ? "cpu" : "you";
+  }
 }
 
 // ---------- Streak & study timer ----------
@@ -1328,7 +1864,7 @@ function hideTip() { tip.style.display = "none"; }
 // Screens where you're actually learning: answering flashcards, and a topic's notes,
 // mistakes and flashcards tabs, plus homework mistakes. Menus, links and scores don't count.
 function isLearning() {
-  if (overlay) return !!overlay.querySelector("#fc");
+  if (overlay) return !!overlay.querySelector("#fc, .game-live");
   const [subject, year, topicId] = route();
   if (year === "homework") return true;
   return !!topicId && ["notes", "mistakes", "cards"].includes(topicTab);
