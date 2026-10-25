@@ -26,6 +26,8 @@
     --confident: #2a78d6;
     --improving: #eb6834;
     --sea: #cfe3fb;
+    --hit: #f6c4c4;
+    --miss: #eef1f6;
     --shadow: 0 2px 8px rgba(20, 30, 60, 0.08);
   }
   @media (prefers-color-scheme: dark) {
@@ -38,6 +40,8 @@
       --confident: #3987e5;
       --improving: #d95926;
       --sea: #1d3a5c;
+      --hit: #6b2a2e;
+      --miss: #2a303b;
       --shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
     }
   }
@@ -236,7 +240,18 @@
   .bs .sq.open { cursor: pointer; }
   .bs .sq.open:hover { outline: 2px solid var(--accent); }
   .bs .sq.ship { background: var(--muted); }
-  .bs .sq.sunk { background: rgba(214, 69, 69, 0.35); }
+  .bs .sq.hit { background: var(--hit); }
+  .bs .sq.sunk { background: #d64545; }
+  .bs .sq.miss { background: var(--miss); }
+  .bs .sq.last { box-shadow: 0 0 0 3px #f5c400 inset; }
+  .bs-key { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 14px; font-size: 0.85rem; color: var(--muted); }
+  .bs-key > span { display: flex; align-items: center; gap: 5px; }
+  .bs-key .sq { width: 22px; height: 22px; border-radius: 4px; background: var(--sea); display: inline-flex; align-items: center; justify-content: center; font-size: 0.75rem; }
+  .bs-key .sq.ship { background: var(--muted); }
+  .bs-key .sq.hit { background: var(--hit); }
+  .bs-key .sq.sunk { background: #d64545; }
+  .bs-key .sq.miss { background: var(--miss); }
+  .bs-key .sq.last { box-shadow: 0 0 0 3px #f5c400 inset; }
 
   footer { text-align: center; color: var(--muted); font-size: 0.85rem; padding: 10px 16px 30px; }
   footer button { margin: 4px; }
@@ -1598,22 +1613,36 @@ async function playBattle(game) {
     <div class="bs" id="enemy"></div>
     <div class="hint" style="margin:0"><b>Your ships</b></div>
     <div class="bs small" id="mine"></div>
-    <div class="hint" style="margin:0">💥 hit · • miss · ships: ${BS_SHIPS.join(", ")} squares long</div>`;
+    <div class="bs-key">
+      <span><span class="sq hit">💥</span> Hit</span>
+      <span><span class="sq sunk">🔥</span> Ship sunk</span>
+      <span><span class="sq miss">💦</span> Miss</span>
+      <span><span class="sq ship"></span> Your ship</span>
+      <span><span class="sq last"></span> Last shot</span>
+    </div>
+    <div class="hint" style="margin:0">Ships are ${BS_SHIPS.join(", ")} squares long</div>`;
   let pick = null;
+  const last = { you: null, cpu: null }; // each side's latest shot, ringed in yellow
+  // How a square looks once it has been fired at
+  const shotLook = (side, i) => {
+    const ship = shipAt(side, i);
+    if (!ship) return { cls: " miss", mark: "💦" };
+    return sunk(side, ship) ? { cls: " sunk", mark: "🔥" } : { cls: " hit", mark: "💥" };
+  };
   const draw = () => {
     const enemy = game.board.querySelector("#enemy"), mine = game.board.querySelector("#mine");
     enemy.innerHTML = mine.innerHTML = "";
     for (let i = 0; i < BS_SIZE * BS_SIZE; i++) {
       const e = document.createElement("div");
-      const eShip = shipAt("cpu", i);
-      e.className = "sq" + (shots.you.has(i) ? (eShip ? (sunk("cpu", eShip) ? " sunk" : " hit") : " miss") : " open");
-      e.textContent = shots.you.has(i) ? (eShip ? "💥" : "•") : "";
+      const eLook = shots.you.has(i) ? shotLook("cpu", i) : { cls: " open", mark: "" };
+      e.className = "sq" + eLook.cls + (last.you === i ? " last" : "");
+      e.textContent = eLook.mark;
       e.onclick = () => { if (pick && !shots.you.has(i)) { const r = pick; pick = null; r(i); } };
       enemy.append(e);
       const m = document.createElement("div");
-      const mShip = shipAt("you", i);
-      m.className = "sq" + (mShip ? " ship" : "") + (shots.cpu.has(i) ? (mShip ? " hit" : " miss") : "");
-      m.textContent = shots.cpu.has(i) ? (mShip ? "💥" : "•") : "";
+      const mLook = shots.cpu.has(i) ? shotLook("you", i) : { cls: shipAt("you", i) ? " ship" : "", mark: "" };
+      m.className = "sq" + mLook.cls + (last.cpu === i ? " last" : "");
+      m.textContent = mLook.mark;
       mine.append(m);
     }
   };
@@ -1632,11 +1661,12 @@ async function playBattle(game) {
   };
   const fire = (side, i) => {
     shots[side].add(i);
+    last[side] = i;
     const target = side === "you" ? "cpu" : "you";
     const ship = shipAt(target, i);
     draw();
-    if (!ship) return "🌊 Miss!";
-    return sunk(target, ship) ? `💥 Hit — and a ${ship.length}-square ship is <b>sunk</b>!` : "💥 Hit!";
+    if (!ship) return "💦 <b>Miss</b> — just water.";
+    return sunk(target, ship) ? `🔥 <b>Hit — and a ${ship.length}-square ship is sunk!</b>` : "💥 <b>Hit!</b>";
   };
   let turn = "you";
   draw();
