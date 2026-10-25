@@ -244,8 +244,18 @@
   .c4 .slot.you { background: #e5484d; }
   .c4 .slot.cpu { background: #f5c400; }
   .c4 .slot.win { box-shadow: 0 0 0 4px #fff inset; }
-  .bs { display: grid; grid-template-columns: repeat(8, 1fr); gap: 3px; width: min(400px, 100%); }
-  .bs.small { width: min(240px, 65%); }
+  .bs { display: grid; grid-template-columns: repeat(10, 1fr); gap: 3px; width: min(520px, 100%); }
+  .bs.small { width: min(340px, 85%); gap: 2px; }
+  .fleet { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; max-width: 520px; }
+  .fleet-title { width: 100%; text-align: center; font-size: 0.85rem; color: var(--muted); }
+  .ship-chip { font-size: 0.8rem; padding: 3px 8px; border-radius: 999px; background: var(--card); border: 1px solid var(--border); white-space: nowrap; }
+  .ship-chip i { font-style: normal; letter-spacing: -1px; color: var(--muted); font-size: 0.7rem; }
+  .ship-chip.gone { background: rgba(214, 69, 69, 0.15); border-color: #d64545; text-decoration: line-through; color: var(--muted); }
+  .toast { position: fixed; top: 30%; left: 50%; transform: translate(-50%, -50%); z-index: 26; background: #d64545; color: #fff;
+    font-size: 1.6rem; font-weight: 700; padding: 16px 28px; border-radius: 18px; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
+    text-align: center; pointer-events: none; animation: pop 0.35s ease-out; }
+  .toast small { display: block; font-size: 1rem; font-weight: 500; margin-top: 4px; }
+  @keyframes pop { 0% { transform: translate(-50%, -50%) scale(0.6); opacity: 0; } 100% { transform: translate(-50%, -50%) scale(1); opacity: 1; } }
   .bs .sq { aspect-ratio: 1; background: var(--sea); border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: clamp(0.7rem, 3vw, 1.1rem); color: var(--muted); }
   .bs .sq.open { cursor: pointer; }
   .bs .sq.open:hover { outline: 2px solid var(--accent); }
@@ -1200,7 +1210,7 @@ const GAMES = {
   snakes:  { icon: "🐍", name: "Snakes & Ladders",  about: "Answer to roll the dice. Land on a ladder and answer to climb it; land on a snake and answer to escape it. First to 100 wins." },
   noughts: { icon: "⭕", name: "Noughts & Crosses", about: "Pick a square, then answer to claim it. Three in a row wins." },
   connect: { icon: "🔴", name: "Connect Four",      about: "Pick a column, then answer to drop your counter. Four in a row wins." },
-  battle:  { icon: "🚢", name: "Battleships",       about: "Pick a square to fire at, then answer to take the shot. Sink all the computer's ships first." },
+  battle:  { icon: "🚢", name: "Battleships",       about: "Pick a square to fire at, then answer to take the shot. Sink all 6 of the computer's ships first." },
 };
 const DIFFICULTY = {
   easy:   { label: "😊 Easy",   skill: 0.45, tactics: 0.2,  best: false,
@@ -1652,11 +1662,16 @@ async function playConnect(game) {
 }
 
 // ---------- Battleships ----------
-const BS_SIZE = 8, BS_SHIPS = [4, 3, 3, 2];
+const BS_SIZE = 10;
+const BS_FLEET = [
+  { name: "Carrier", len: 5 }, { name: "Battleship", len: 4 }, { name: "Cruiser", len: 3 },
+  { name: "Submarine", len: 3 }, { name: "Destroyer", len: 2 }, { name: "Patrol boat", len: 2 },
+];
+// Returns each ship's squares, in the same order as BS_FLEET
 function placeShips() {
   const ships = [];
   const taken = new Set();
-  BS_SHIPS.forEach(len => {
+  BS_FLEET.forEach(({ len }) => {
     while (true) {
       const across = Math.random() < 0.5;
       const r = Math.floor(Math.random() * (across ? BS_SIZE : BS_SIZE - len + 1));
@@ -1677,10 +1692,13 @@ async function playBattle(game) {
   const shipAt = (side, i) => fleets[side].find(s => s.includes(i));
   const sunk = (side, ship) => ship.every(i => shots[side === "you" ? "cpu" : "you"].has(i));
   const allSunk = side => fleets[side].every(s => sunk(side, s));
+  const shipName = (side, ship) => BS_FLEET[fleets[side].indexOf(ship)].name;
   game.board.innerHTML = `<div class="hint" style="margin:0"><b>The computer's sea</b> — tap a square to fire</div>
     <div class="bs" id="enemy"></div>
+    <div class="fleet" id="cpuFleet"></div>
     <div class="hint" style="margin:0"><b>Your ships</b></div>
     <div class="bs small" id="mine"></div>
+    <div class="fleet" id="myFleet"></div>
     <div class="bs-key">
       <span><span class="sq hit">💥</span> Hit</span>
       <span><span class="sq sunk">🔥</span> Ship sunk</span>
@@ -1688,7 +1706,7 @@ async function playBattle(game) {
       <span><span class="sq ship"></span> Your ship</span>
       <span><span class="sq last"></span> Last shot</span>
     </div>
-    <div class="hint" style="margin:0">Ships are ${BS_SHIPS.join(", ")} squares long</div>`;
+`;
   let pick = null;
   const last = { you: null, cpu: null }; // each side's latest shot, ringed in yellow
   // How a square looks once it has been fired at
@@ -1713,6 +1731,22 @@ async function playBattle(game) {
       m.textContent = mLook.mark;
       mine.append(m);
     }
+    // Which ships are still afloat on each side
+    const fleetList = (side, title) => {
+      const left = fleets[side].filter(sh => !sunk(side, sh)).length;
+      return `<div class="fleet-title">${title}: <b>${left} of ${BS_FLEET.length}</b> still afloat</div>` +
+        fleets[side].map((sh, k) => `<span class="ship-chip${sunk(side, sh) ? " gone" : ""}">${sunk(side, sh) ? "🔥" : "🚢"} ${BS_FLEET[k].name} <i>${"■".repeat(BS_FLEET[k].len)}</i></span>`).join("");
+    };
+    game.board.querySelector("#cpuFleet").innerHTML = fleetList("cpu", "Computer's fleet");
+    game.board.querySelector("#myFleet").innerHTML = fleetList("you", "Your fleet");
+  };
+  // A big pop-up so a sinking can't be missed
+  const toast = html => {
+    const t = document.createElement("div");
+    t.className = "toast";
+    t.innerHTML = html;
+    overlay.querySelector(".game").append(t);
+    setTimeout(() => t.remove(), 2600);
   };
   // Computer: sometimes a random square (easy/medium); else fire next to a hit it hasn't finished
   // sinking. Hard also follows a line of hits to the end and searches on a checkerboard.
@@ -1751,8 +1785,14 @@ async function playBattle(game) {
     const target = side === "you" ? "cpu" : "you";
     const ship = shipAt(target, i);
     draw();
-    if (!ship) return "💦 <b>Miss</b> — just water.";
-    return sunk(target, ship) ? `🔥 <b>Hit — and a ${ship.length}-square ship is sunk!</b>` : "💥 <b>Hit!</b>";
+    if (!ship) return { msg: "💦 <b>Miss</b> — just water." };
+    if (!sunk(target, ship)) return { msg: "💥 <b>Hit!</b>" };
+    const name = shipName(target, ship);
+    const msg = side === "you"
+      ? `🔥 <b>Hit — you sank the computer's ${name}!</b> (${ship.length} squares)`
+      : `🔥 <b>Hit — the computer sank your ${name}!</b> (${ship.length} squares)`;
+    toast(`🔥 Ship sunk!<small>${side === "you" ? `You sank the computer's ${name}` : `The computer sank your ${name}`}</small>`);
+    return { msg, sunk: true };
   };
   let turn = "you";
   draw();
@@ -1760,17 +1800,21 @@ async function playBattle(game) {
     if (turn === "you") {
       game.status("Your turn — tap a square on the computer's sea");
       const i = await new Promise(r => { pick = r; });
-      if (await game.ask("Get it right to fire 🚀")) game.status(fire("you", i));
-      else game.status("❌ Missed the question — your shot goes wide.");
-      if (allSunk("cpu")) { await game.wait(1000); return game.end("win"); }
+      let shot = { msg: "❌ Missed the question — your shot goes wide." };
+      if (await game.ask("Get it right to fire 🚀")) shot = fire("you", i);
+      game.status(shot.msg);
+      if (allSunk("cpu")) { await game.wait(1800); return game.end("win"); }
+      // Give a sinking longer on screen before the computer's turn
+      await game.wait(shot.sunk ? 2600 : 1300);
     } else {
       game.status("🤖 The computer is answering a question…");
       await game.wait(900);
-      if (game.cpuKnows()) game.status("🤖 The computer fires… " + fire("cpu", cpuTarget()));
-      else game.status("🤖 The computer got its question wrong — no shot!");
-      if (allSunk("you")) { await game.wait(1000); return game.end("lose"); }
+      let shot = { msg: "🤖 The computer got its question wrong — no shot!" };
+      if (game.cpuKnows()) { shot = fire("cpu", cpuTarget()); shot.msg = "🤖 The computer fires… " + shot.msg; }
+      game.status(shot.msg);
+      if (allSunk("you")) { await game.wait(1800); return game.end("lose"); }
+      await game.wait(shot.sunk ? 2600 : 1300);
     }
-    await game.wait(1300);
     turn = turn === "you" ? "cpu" : "you";
   }
 }
