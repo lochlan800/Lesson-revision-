@@ -1193,8 +1193,9 @@ function closeRevise() {
 
 // ---------- Revision board games ----------
 // Every move needs a flashcard answered right first. Answers count just like in a revision round
-// (confident / improving, spaced repetition, the study timer). You play against the computer,
-// which "knows" each answer with a chance set by the difficulty.
+// (confident / improving, spaced repetition, the study timer). You play against the computer;
+// the difficulty sets both how often it "knows" an answer (skill) and how well it plays:
+// tactics = chance of a sensible move (win, block...) rather than a random one, best = its strongest play.
 const GAMES = {
   snakes:  { icon: "🐍", name: "Snakes & Ladders",  about: "Answer to roll the dice. Land on a ladder and answer to climb it; land on a snake and answer to escape it. First to 100 wins." },
   noughts: { icon: "⭕", name: "Noughts & Crosses", about: "Pick a square, then answer to claim it. Three in a row wins." },
@@ -1202,9 +1203,12 @@ const GAMES = {
   battle:  { icon: "🚢", name: "Battleships",       about: "Pick a square to fire at, then answer to take the shot. Sink all the computer's ships first." },
 };
 const DIFFICULTY = {
-  easy:   { label: "😊 Easy",   skill: 0.45 },
-  medium: { label: "🙂 Medium", skill: 0.65 },
-  hard:   { label: "😤 Hard",   skill: 0.85 },
+  easy:   { label: "😊 Easy",   skill: 0.45, tactics: 0.2,  best: false,
+            about: "Gets lots of its questions wrong and mostly picks its moves at random." },
+  medium: { label: "🙂 Medium", skill: 0.65, tactics: 0.65, best: false,
+            about: "Gets most questions right and usually spots a win or a block." },
+  hard:   { label: "😤 Hard",   skill: 0.85, tactics: 1,    best: true,
+            about: "Rarely gets a question wrong and always plays its best move: it never misses a win or a block, and in Battleships it chases your ships down." },
 };
 let gameChoice = "snakes", gameScope = "topic", gameLevel = "medium";
 
@@ -1222,6 +1226,7 @@ function renderGamesTab(body, topic, subject, year) {
       <label class="check" style="margin-bottom:6px">How good is the computer?</label>
       <div class="tabs" id="gameLevel" style="margin-bottom:16px">${Object.entries(DIFFICULTY).map(([k, d]) =>
         `<button class="tab" data-v="${k}">${d.label}</button>`).join("")}</div>
+      <p class="hint" style="margin:-8px 0 16px">${DIFFICULTY[gameLevel].about} (Snakes & Ladders is down to the dice, so there only the questions change.)</p>
       <button class="btn good" id="play">🎲 Play ${GAMES[gameChoice].name}</button>
     </div>`;
   const grid = body.querySelector("#gameTiles");
@@ -1284,6 +1289,8 @@ function startGame(kind, items, levelKey, title) {
     // Waits, but never carries on once the game has been closed
     wait: ms => new Promise(r => setTimeout(() => { if (overlay === me) r(); }, ms)),
     cpuKnows: () => Math.random() < DIFFICULTY[levelKey].skill,
+    cpuSmart: () => Math.random() < DIFFICULTY[levelKey].tactics,
+    cpuBest: DIFFICULTY[levelKey].best,
     ask: why => askQuestion(game, game.next(), why),
     // Shows a button under the status line and waits for it to be pressed
     button: label => new Promise(r => {
@@ -1525,9 +1532,28 @@ async function playNoughts(game) {
       grid.append(b);
     });
   };
-  // Computer: win if it can, block you, then centre, corners, anything
+  const freeOf = board => board.map((v, i) => (v ? null : i)).filter(i => i !== null);
+  // Looks at every possible game from here; O wants the highest score, X the lowest
+  const minimax = (board, mark) => {
+    const w = winner(board, LINES);
+    if (w) return { score: w.who === "O" ? 10 : -10 };
+    const free = freeOf(board);
+    if (!free.length) return { score: 0 };
+    let best = null;
+    shuffle(free).forEach(i => {
+      board[i] = mark;
+      const r = minimax(board, mark === "O" ? "X" : "O");
+      board[i] = null;
+      const score = r.score - Math.sign(r.score); // a quicker win (or slower loss) is better
+      if (!best || (mark === "O" ? score > best.score : score < best.score)) best = { score, move: i };
+    });
+    return best;
+  };
+  // Hard: perfect play. Otherwise: sometimes a random square, else win, block, centre, corners
   const cpuMove = () => {
-    const free = cells.map((v, i) => (v ? null : i)).filter(i => i !== null);
+    const free = freeOf(cells);
+    if (game.cpuBest) return minimax(cells.slice(), "O").move;
+    if (!game.cpuSmart()) return randomOf(free);
     for (const mark of ["O", "X"]) for (const i of free) {
       const test = cells.slice(); test[i] = mark;
       if (winner(test, LINES)) return i;
@@ -1568,7 +1594,7 @@ async function playConnect(game) {
   game.board.innerHTML = `<div class="c4"></div><div class="hint" style="margin:0">You are <span style="color:#e5484d">●</span> red · the computer is <span style="color:#d4a400">●</span> yellow</div>`;
   const grid = game.board.querySelector(".c4");
   let pick = null;
-  const lowest = col => { for (let r = ROWS - 1; r >= 0; r--) if (!cells[r * COLS + col]) return r * COLS + col; return -1; };
+  const lowest = (col, board = cells) => { for (let r = ROWS - 1; r >= 0; r--) if (!board[r * COLS + col]) return r * COLS + col; return -1; };
   const draw = (highlight = []) => {
     grid.innerHTML = "";
     cells.forEach((v, i) => {
@@ -1578,14 +1604,27 @@ async function playConnect(game) {
       grid.append(d);
     });
   };
-  // Computer: win if it can, block you, otherwise prefer the middle columns
+  // Sometimes a random column (easy/medium); else win if it can, block you, prefer the middle.
+  // Hard also never drops a counter that would let you win by playing on top of it.
   const cpuMove = () => {
     const open = [...Array(COLS).keys()].filter(c => lowest(c) >= 0);
+    if (!game.cpuBest && !game.cpuSmart()) return randomOf(open);
     for (const mark of ["cpu", "you"]) for (const c of open) {
       const test = cells.slice(); test[lowest(c)] = mark;
       if (winner(test, LINES)) return c;
     }
-    const weighted = open.flatMap(c => Array(4 - Math.abs(3 - c)).fill(c));
+    let choices = open;
+    if (game.cpuBest) {
+      const safe = open.filter(c => {
+        const test = cells.slice(); test[lowest(c)] = "cpu";
+        const above = lowest(c, test);
+        if (above < 0) return true;
+        test[above] = "you";
+        return !winner(test, LINES);
+      });
+      if (safe.length) choices = safe;
+    }
+    const weighted = choices.flatMap(c => Array(4 - Math.abs(3 - c)).fill(c));
     return randomOf(weighted);
   };
   let turn = "you";
@@ -1675,18 +1714,36 @@ async function playBattle(game) {
       mine.append(m);
     }
   };
-  // Computer: fire next to a hit it hasn't finished sinking, otherwise anywhere on a checkerboard
+  // Computer: sometimes a random square (easy/medium); else fire next to a hit it hasn't finished
+  // sinking. Hard also follows a line of hits to the end and searches on a checkerboard.
+  const step = (i, d) => {
+    const r = Math.floor(i / BS_SIZE), c = i % BS_SIZE;
+    if (d === "up") return r > 0 ? i - BS_SIZE : -1;
+    if (d === "down") return r < BS_SIZE - 1 ? i + BS_SIZE : -1;
+    if (d === "left") return c > 0 ? i - 1 : -1;
+    return c < BS_SIZE - 1 ? i + 1 : -1;
+  };
+  const DIRS = ["up", "down", "left", "right"];
   const cpuTarget = () => {
-    const free = i => i >= 0 && i < BS_SIZE * BS_SIZE && !shots.cpu.has(i);
-    const hits = [...shots.cpu].filter(i => { const s = shipAt("you", i); return s && !sunk("you", s); });
-    const near = hits.flatMap(i => {
-      const r = Math.floor(i / BS_SIZE), c = i % BS_SIZE;
-      return [r > 0 ? i - BS_SIZE : -1, r < BS_SIZE - 1 ? i + BS_SIZE : -1, c > 0 ? i - 1 : -1, c < BS_SIZE - 1 ? i + 1 : -1];
-    }).filter(free);
-    if (near.length) return randomOf(near);
+    const free = i => i >= 0 && !shots.cpu.has(i);
     const open = [...Array(BS_SIZE * BS_SIZE).keys()].filter(free);
+    if (!game.cpuBest && !game.cpuSmart()) return randomOf(open);
+    const hits = new Set([...shots.cpu].filter(i => { const s = shipAt("you", i); return s && !sunk("you", s); }));
+    if (game.cpuBest) {
+      // Two hits side by side show which way the ship lies: keep going along that line
+      const ends = [];
+      hits.forEach(i => DIRS.forEach(d => {
+        if (!hits.has(step(i, d))) return;
+        let j = i;
+        while (hits.has(j)) j = step(j, d);
+        if (free(j)) ends.push(j);
+      }));
+      if (ends.length) return randomOf(ends);
+    }
+    const near = [...hits].flatMap(i => DIRS.map(d => step(i, d))).filter(free);
+    if (near.length) return randomOf(near);
     const checker = open.filter(i => (Math.floor(i / BS_SIZE) + i) % 2 === 0);
-    return randomOf(checker.length ? checker : open);
+    return randomOf(game.cpuBest && checker.length ? checker : open);
   };
   const fire = (side, i) => {
     shots[side].add(i);
