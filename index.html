@@ -218,6 +218,16 @@
   .game-result .qcard { box-shadow: var(--shadow); border: 2px solid var(--accent); padding: 14px; }
   .qfront { font-size: 1.3rem; white-space: pre-wrap; word-break: break-word; margin: 12px 0; }
   .qback { font-size: 1.15rem; white-space: pre-wrap; word-break: break-word; border-top: 1px solid var(--border); padding-top: 12px; margin-bottom: 8px; }
+  .die { width: 64px; height: 64px; padding: 10px; gap: 2px; display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr);
+    background: #fff; border-radius: 14px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25), inset 0 -4px 0 rgba(0, 0, 0, 0.08); }
+  .die.cpu { background: #ffe7a3; }
+  .die i { border-radius: 50%; }
+  .die i.on { background: #1d2433; }
+  .die.rolling { animation: tumble 0.3s linear infinite; }
+  .die.landed { animation: land 0.4s ease-out; }
+  @keyframes tumble { 0% { transform: translateY(0) rotate(0); } 25% { transform: translateY(-14px) rotate(90deg); } 50% { transform: translateY(0) rotate(180deg); } 75% { transform: translateY(-8px) rotate(270deg); } 100% { transform: translateY(0) rotate(360deg); } }
+  @keyframes land { 0% { transform: scale(1.3); } 60% { transform: scale(0.9); } 100% { transform: scale(1); } }
+  @media (prefers-reduced-motion: reduce) { .die.rolling, .die.landed { animation: none; } }
   .sl-board { display: grid; grid-template-columns: repeat(10, 1fr); width: 100%; max-width: 520px; aspect-ratio: 1; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
   .sl-cell { position: relative; background: var(--card); font-size: 0.6rem; color: var(--muted); padding: 2px 3px; display: flex; flex-direction: column; line-height: 1.1; overflow: hidden; }
   .sl-cell.alt { background: var(--bg); }
@@ -1402,7 +1412,8 @@ const LADDERS = { 1: 38, 4: 14, 9: 31, 21: 42, 28: 84, 36: 44, 51: 67, 71: 91, 8
 async function playSnakes(game) {
   const pos = { you: 0, cpu: 0 };
   const who = { you: "🧑 You", cpu: "🤖 Computer" };
-  game.board.innerHTML = `<div class="sl-board"></div>
+  game.board.innerHTML = `<div class="die" id="die"></div>
+    <div class="sl-board"></div>
     <div class="hint" style="margin:0">🧑 You: <b id="slYou">start</b> · 🤖 Computer: <b id="slCpu">start</b> · 🪜 ladder up · 🐍 snake down</div>`;
   const grid = game.board.querySelector(".sl-board");
   // Square 1 is bottom-left and the numbers snake back and forth up the board
@@ -1428,51 +1439,69 @@ async function playSnakes(game) {
     game.board.querySelector("#slCpu").textContent = pos.cpu || "start";
   };
   draw();
-  const roll = async () => {
-    for (let k = 0; k < 6; k++) { game.status(`🎲 ${1 + Math.floor(Math.random() * 6)}`); await game.wait(80); }
-    return 1 + Math.floor(Math.random() * 6);
+  // The dice tumbles through random faces, slowing down, then lands with a bounce
+  const die = game.board.querySelector("#die");
+  const PIPS = { 1: [4], 2: [0, 8], 3: [0, 4, 8], 4: [0, 2, 6, 8], 5: [0, 2, 4, 6, 8], 6: [0, 2, 3, 5, 6, 8] };
+  const face = n => { die.innerHTML = [...Array(9).keys()].map(k => `<i class="${PIPS[n].includes(k) ? "on" : ""}"></i>`).join(""); };
+  face(6);
+  const roll = async side => {
+    game.status(`🎲 ${side === "you" ? "Rolling…" : "🤖 The computer is rolling…"}`);
+    die.classList.toggle("cpu", side === "cpu");
+    die.classList.remove("landed");
+    die.classList.add("rolling");
+    for (let k = 0, delay = 60; k < 12; k++, delay += 14) { face(1 + Math.floor(Math.random() * 6)); await game.wait(delay); }
+    const n = 1 + Math.floor(Math.random() * 6);
+    face(n);
+    die.classList.remove("rolling");
+    void die.offsetWidth; // restart the landing animation
+    die.classList.add("landed");
+    await game.wait(600);
+    return n;
   };
   let turn = "you";
   while (true) {
     const you = turn === "you";
-    let ok;
+    // Roll first, then answer a question to be allowed to move that many squares
     if (you) {
       game.status("Your turn!");
-      await game.button("🎲 Answer to roll");
-      ok = await game.ask("Get it right to roll the dice 🎲");
+      await game.button("🎲 Roll the dice");
     } else {
-      game.status("🤖 The computer is answering a question…");
-      await game.wait(900);
-      ok = game.cpuKnows();
+      await game.wait(700);
     }
-    if (!ok) {
-      game.status(you ? "❌ Not this time — no roll for you." : "🤖 The computer got its question wrong — no roll!");
-      await game.wait(1300);
+    const n = await roll(turn);
+    let ok = false;
+    if (pos[turn] + n > 100) {
+      game.status(`🎲 ${who[turn]} rolled a <b>${n}</b> — ${you ? "you need" : "it needs"} exactly ${100 - pos[turn]} to finish, so no move.`);
+      await game.wait(1600);
+    } else if (you) {
+      game.status(`🎲 You rolled a <b>${n}</b>!`);
+      await game.wait(500);
+      ok = await game.ask(`🎲 You rolled a ${n}! Get it right to move ${plural(n, "square")}`);
+      if (!ok) { game.status("❌ Not this time — you stay where you are."); await game.wait(1300); }
     } else {
-      const n = await roll();
-      const target = pos[turn] + n;
-      if (target > 100) {
-        game.status(`🎲 ${who[turn]} rolled a <b>${n}</b> — you need exactly ${100 - pos[turn]} to finish, so no move.`);
-        await game.wait(1500);
+      game.status(`🎲 🤖 The computer rolled a <b>${n}</b> and is answering a question…`);
+      await game.wait(1000);
+      ok = game.cpuKnows();
+      if (!ok) { game.status("🤖 The computer got its question wrong — it stays put!"); await game.wait(1300); }
+    }
+    if (ok) {
+      game.status(`${who[turn]} ${you ? "move" : "moves"} ${plural(n, "square")}…`);
+      for (let k = 0; k < n; k++) { pos[turn]++; draw(); await game.wait(160); }
+      const ladder = LADDERS[pos[turn]], snake = SNAKES[pos[turn]];
+      if (ladder || snake) {
+        let right;
+        if (you) right = await game.ask(ladder ? `🪜 A ladder to ${ladder}! Get it right to climb it` : `🐍 A snake down to ${snake}! Get it right to escape it`);
+        else { game.status(`🤖 The computer landed on a ${ladder ? "ladder 🪜" : "snake 🐍"} and is answering…`); await game.wait(1000); right = game.cpuKnows(); }
+        if (ladder && right) { pos[turn] = ladder; game.status(`🪜 ${who[turn]} climbed to <b>${ladder}</b>!`); }
+        else if (ladder) game.status(`🪜 ${who[turn]} missed the ladder.`);
+        else if (right) game.status(`🐍 ${who[turn]} escaped the snake!`);
+        else { pos[turn] = snake; game.status(`🐍 ${who[turn]} slid down to <b>${snake}</b>.`); }
+        draw();
+        await game.wait(1400);
       } else {
-        game.status(`🎲 ${who[turn]} rolled a <b>${n}</b>!`);
-        for (let k = 0; k < n; k++) { pos[turn]++; draw(); await game.wait(160); }
-        const ladder = LADDERS[pos[turn]], snake = SNAKES[pos[turn]];
-        if (ladder || snake) {
-          let right;
-          if (you) right = await game.ask(ladder ? `🪜 A ladder to ${ladder}! Get it right to climb it` : `🐍 A snake down to ${snake}! Get it right to escape it`);
-          else { game.status(`🤖 The computer landed on a ${ladder ? "ladder 🪜" : "snake 🐍"} and is answering…`); await game.wait(1000); right = game.cpuKnows(); }
-          if (ladder && right) { pos[turn] = ladder; game.status(`🪜 ${who[turn]} climbed to <b>${ladder}</b>!`); }
-          else if (ladder) game.status(`🪜 ${who[turn]} missed the ladder.`);
-          else if (right) game.status(`🐍 ${who[turn]} escaped the snake!`);
-          else { pos[turn] = snake; game.status(`🐍 ${who[turn]} slid down to <b>${snake}</b>.`); }
-          draw();
-          await game.wait(1400);
-        } else {
-          await game.wait(500);
-        }
-        if (pos[turn] === 100) return game.end(you ? "win" : "lose");
+        await game.wait(500);
       }
+      if (pos[turn] === 100) return game.end(you ? "win" : "lose");
     }
     turn = you ? "cpu" : "you";
   }
