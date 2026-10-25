@@ -1667,23 +1667,33 @@ const BS_FLEET = [
   { name: "Carrier", len: 5 }, { name: "Battleship", len: 4 }, { name: "Cruiser", len: 3 },
   { name: "Submarine", len: 3 }, { name: "Destroyer", len: 2 }, { name: "Patrol boat", len: 2 },
 ];
-// Returns each ship's squares, in the same order as BS_FLEET
+// Returns each ship's squares, in the same order as BS_FLEET.
+// Ships never touch, not even at the corners, so a line of hits always belongs to one ship.
 function placeShips() {
-  const ships = [];
-  const taken = new Set();
-  BS_FLEET.forEach(({ len }) => {
-    while (true) {
-      const across = Math.random() < 0.5;
-      const r = Math.floor(Math.random() * (across ? BS_SIZE : BS_SIZE - len + 1));
-      const c = Math.floor(Math.random() * (across ? BS_SIZE - len + 1 : BS_SIZE));
-      const squares = [...Array(len).keys()].map(k => (across ? r * BS_SIZE + c + k : (r + k) * BS_SIZE + c));
-      if (squares.some(i => taken.has(i))) continue;
-      squares.forEach(i => taken.add(i));
-      ships.push(squares);
-      break;
-    }
-  });
-  return ships;
+  while (true) {
+    const ships = [];
+    const blocked = new Set(); // ship squares plus the squares around them
+    const fits = BS_FLEET.every(({ len }) => {
+      for (let tries = 0; tries < 200; tries++) {
+        const across = Math.random() < 0.5;
+        const r = Math.floor(Math.random() * (across ? BS_SIZE : BS_SIZE - len + 1));
+        const c = Math.floor(Math.random() * (across ? BS_SIZE - len + 1 : BS_SIZE));
+        const squares = [...Array(len).keys()].map(k => (across ? r * BS_SIZE + c + k : (r + k) * BS_SIZE + c));
+        if (squares.some(i => blocked.has(i))) continue;
+        squares.forEach(i => {
+          const rr = Math.floor(i / BS_SIZE), cc = i % BS_SIZE;
+          for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+            const nr = rr + dr, nc = cc + dc;
+            if (nr >= 0 && nc >= 0 && nr < BS_SIZE && nc < BS_SIZE) blocked.add(nr * BS_SIZE + nc);
+          }
+        });
+        ships.push(squares);
+        return true;
+      }
+      return false; // boxed in: start the whole board again
+    });
+    if (fits) return ships;
+  }
 }
 
 async function playBattle(game) {
@@ -1706,6 +1716,7 @@ async function playBattle(game) {
       <span><span class="sq ship"></span> Your ship</span>
       <span><span class="sq last"></span> Last shot</span>
     </div>
+    <div class="hint" style="margin:0">Ships never touch each other, not even corner to corner.</div>
 `;
   let pick = null;
   const last = { you: null, cpu: null }; // each side's latest shot, ringed in yellow
