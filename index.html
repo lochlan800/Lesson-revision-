@@ -221,6 +221,10 @@
   .die { width: 64px; height: 64px; padding: 10px; gap: 2px; display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr);
     background: #fff; border-radius: 14px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25), inset 0 -4px 0 rgba(0, 0, 0, 0.08); }
   .die.cpu { background: #ffe7a3; }
+  .dice-pair { display: flex; gap: 28px; justify-content: center; }
+  .die-box { display: flex; flex-direction: column; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--muted); opacity: 0.45; transition: opacity 0.2s; }
+  .die-box.active { opacity: 1; color: var(--text); font-weight: 600; }
+  .die-box.active .die { outline: 3px solid var(--accent); outline-offset: 4px; }
   .die i { border-radius: 50%; }
   .die i.on { background: #1d2433; }
   .die.rolling { animation: tumble 0.3s linear infinite; }
@@ -1449,7 +1453,10 @@ const LADDERS = { 1: 38, 4: 14, 9: 31, 21: 42, 28: 84, 36: 44, 51: 67, 71: 91, 8
 async function playSnakes(game) {
   const pos = { you: 0, cpu: 0 };
   const who = { you: "🧑 You", cpu: "🤖 Computer" };
-  game.board.innerHTML = `<div class="die" id="die"></div>
+  game.board.innerHTML = `<div class="dice-pair">
+      <div class="die-box" id="boxYou"><div class="die" id="dieYou"></div><span>🧑 Your dice</span></div>
+      <div class="die-box" id="boxCpu"><div class="die cpu" id="dieCpu"></div><span>🤖 Computer's dice</span></div>
+    </div>
     <div class="sl-board"></div>
     <div class="hint" style="margin:0">🧑 You: <b id="slYou">start</b> · 🤖 Computer: <b id="slCpu">start</b> · 🪜 ladder up · 🐍 snake down</div>`;
   const grid = game.board.querySelector(".sl-board");
@@ -1476,19 +1483,26 @@ async function playSnakes(game) {
     game.board.querySelector("#slCpu").textContent = pos.cpu || "start";
   };
   draw();
-  // The dice tumbles through random faces, slowing down, then lands with a bounce
-  const die = game.board.querySelector("#die");
-  const PIPS = { 1: [4], 2: [0, 8], 3: [0, 4, 8], 4: [0, 2, 6, 8], 5: [0, 2, 4, 6, 8], 6: [0, 2, 3, 5, 6, 8] };
-  const face = n => { die.innerHTML = [...Array(9).keys()].map(k => `<i class="${PIPS[n].includes(k) ? "on" : ""}"></i>`).join(""); };
-  face(6);
+  // Each player has their own dice, which keeps showing their last roll.
+  // It tumbles through random faces, slowing down, then lands with a bounce.
+  const dice = { you: game.board.querySelector("#dieYou"), cpu: game.board.querySelector("#dieCpu") };
+  const PIPS = { 0: [], 1: [4], 2: [0, 8], 3: [0, 4, 8], 4: [0, 2, 6, 8], 5: [0, 2, 4, 6, 8], 6: [0, 2, 3, 5, 6, 8] };
+  const face = (die, n) => { die.innerHTML = [...Array(9).keys()].map(k => `<i class="${PIPS[n].includes(k) ? "on" : ""}"></i>`).join(""); };
+  face(dice.you, 0);
+  face(dice.cpu, 0);
+  // Highlight whose turn it is
+  const setActive = side => {
+    game.board.querySelector("#boxYou").classList.toggle("active", side === "you");
+    game.board.querySelector("#boxCpu").classList.toggle("active", side === "cpu");
+  };
   const roll = async side => {
+    const die = dice[side];
     game.status(`🎲 ${side === "you" ? "Rolling…" : "🤖 The computer is rolling…"}`);
-    die.classList.toggle("cpu", side === "cpu");
     die.classList.remove("landed");
     die.classList.add("rolling");
-    for (let k = 0, delay = 60; k < 12; k++, delay += 14) { face(1 + Math.floor(Math.random() * 6)); await game.wait(delay); }
+    for (let k = 0, delay = 60; k < 12; k++, delay += 14) { face(die, 1 + Math.floor(Math.random() * 6)); await game.wait(delay); }
     const n = 1 + Math.floor(Math.random() * 6);
-    face(n);
+    face(die, n);
     die.classList.remove("rolling");
     void die.offsetWidth; // restart the landing animation
     die.classList.add("landed");
@@ -1498,6 +1512,7 @@ async function playSnakes(game) {
   let turn = "you";
   while (true) {
     const you = turn === "you";
+    setActive(turn);
     // Roll first, then answer a question to be allowed to move that many squares
     if (you) {
       game.status("Your turn!");
