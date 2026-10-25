@@ -1270,18 +1270,36 @@ function renderGamesTab(body, topic, subject, year) {
   };
 }
 
-// Picks the next question: mistakes and improving cards come up most, and nothing repeats too soon
+// Picks the next question. Questions come in rounds: every card once per round in a shuffled order,
+// plus extra goes for weak cards (mistakes 3 times a round, improving cards twice), spread through
+// the round so the same card never comes up twice in a row.
+// The round carries on into your next game with the same cards, so a few short games still cover them all
+const pickers = new Map();
+function pickerFor(items) {
+  const key = items.map(it => it.ref.id).sort().join(",");
+  if (!pickers.has(key)) pickers.set(key, questionPicker(items));
+  return pickers.get(key);
+}
+const EXTRA_GOES = it => (it.isMistake ? 2 : it.ref.level === "improving" ? 1 : 0);
 function questionPicker(items) {
-  const recent = [];
-  const weight = it => (it.isMistake || it.ref.level === "improving" ? 3 : !it.ref.level ? 2 : 1);
+  let round = [];
+  let lastPick = null;
+  const newRound = () => {
+    round = shuffle(items.slice());
+    const extras = items.flatMap(it => Array(EXTRA_GOES(it)).fill(it));
+    shuffle(extras).forEach(it => {
+      const spots = [];
+      for (let k = 0; k <= round.length; k++) if (round[k - 1] !== it && round[k] !== it) spots.push(k);
+      round.splice(spots.length ? randomOf(spots) : round.length, 0, it);
+    });
+  };
   return () => {
-    const pool = items.filter(it => !recent.includes(it));
-    const from = pool.length ? pool : items;
-    let r = Math.random() * from.reduce((n, it) => n + weight(it), 0);
-    const pick = from.find(it => (r -= weight(it)) < 0) || from[0];
-    recent.push(pick);
-    while (recent.length > Math.min(5, items.length - 1)) recent.shift();
-    return pick;
+    if (!round.length) newRound();
+    // Don't start a new round with the card that ended the last one
+    let k = round.findIndex(it => it !== lastPick);
+    if (k < 0) k = 0;
+    lastPick = round.splice(k, 1)[0];
+    return lastPick;
   };
 }
 
@@ -1299,7 +1317,7 @@ function startGame(kind, items, levelKey, title) {
   const game = {
     asked: 0, right: 0,
     board: overlay.querySelector("#gBoard"),
-    next: questionPicker(items),
+    next: pickerFor(items),
     alive: () => overlay === me,
     status: html => { const el = me.querySelector("#gStatus"); if (el) el.innerHTML = html; },
     // Waits, but never carries on once the game has been closed
