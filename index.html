@@ -236,15 +236,25 @@ const YEARS = ["Year 7", "Year 8", "Year 9", "Year 10", "Year 11", "Year 12", "Y
 const STORAGE_KEY = "lessonRevisionData.v1";
 
 // ---------- Data ----------
-// data[subject][year] = [ { id, name, lessons: [ { id, name, mistakes: [{id, wrong, right}], cards: [{id, q, a, known}] } ] } ]
+// data[subject][year] = [ { id, name, notes: [{id, text}], mistakes: [{id, wrong, right, ...}], cards: [{id, q, a, ...}], links: [...] } ]
 let data = load();
 
 function load() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) return migrate(JSON.parse(raw));
   } catch (e) {}
   return {};
+}
+// Earlier versions split each topic into lessons: move every lesson's notes, mistakes and flashcards into its topic
+function migrate(d) {
+  SUBJECTS.forEach(s => Object.values(d[s.name] || {}).forEach(topics => topics.forEach(t => {
+    ["notes", "mistakes", "cards"].forEach(k => {
+      t[k] = (t[k] || []).concat(...(t.lessons || []).map(l => l[k] || []));
+    });
+    delete t.lessons;
+  })));
+  return d;
 }
 function save() {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); }
@@ -282,19 +292,17 @@ window.addEventListener("hashchange", () => { editingId = null; render(); });
 document.getElementById("home").onclick = () => go();
 
 const app = document.getElementById("app");
-let lessonTab = "notes";
+let topicTab = "notes";
 
 function render() {
-  const [subject, year, topicId, lessonId] = route();
+  const [subject, year, topicId] = route();
   closeRevise();
   if (!subject || !SUBJECTS.some(s => s.name === subject)) return renderSubjects();
   if (!year) return renderYears(subject);
   if (year === "homework") return renderHomework(subject);
   const topic = topicsFor(subject, year).find(t => t.id === topicId);
   if (!topic) return renderTopics(subject, year);
-  const lesson = topic.lessons.find(l => l.id === lessonId);
-  if (!lesson) return renderLessons(subject, year, topic);
-  renderLesson(subject, year, topic, lesson);
+  renderTopic(subject, year, topic);
 }
 
 function setCrumbs(items) {
@@ -363,9 +371,9 @@ function renderTopics(subject, year) {
   const s = subjectInfo(subject);
   const topics = topicsFor(subject, year);
   setCrumbs([{ label: "Subjects", go: [] }, { label: subject, go: [subject] }, { label: year }]);
-  app.innerHTML = `<h2>${s.icon} ${subject} · ${year}</h2><p class="sub">Add the topics you're studying, then click one to add lessons.</p>
+  app.innerHTML = `<h2>${s.icon} ${subject} · ${year}</h2><p class="sub">Add the topics you're studying, then click one to add notes, mistakes and flashcards.</p>
     <div class="toolbar">
-      <button class="btn good" id="reviseYear">🧠 Revise whole year (${topics.reduce((n, t) => n + t.lessons.reduce((m, l) => m + l.cards.length, 0), 0)} cards)</button>
+      <button class="btn good" id="reviseYear">🧠 Revise whole year (${topics.reduce((n, t) => n + t.cards.length, 0)} cards)</button>
       <label class="check"><input type="checkbox" id="incMistakes"> Include things I got wrong</label>
     </div>
     <h3 style="margin:0 0 10px">Topics</h3>
@@ -377,13 +385,12 @@ function renderTopics(subject, year) {
   const grid = app.querySelector("#grid");
   if (!topics.length) grid.outerHTML = `<div class="empty">No topics yet — add your first one above.</div>`;
   topics.forEach(t => {
-    const cards = t.lessons.reduce((n, l) => n + l.cards.length, 0);
     const tile = document.createElement("div");
     tile.className = "tile";
     tile.innerHTML = `<div class="stripe" style="background:${s.color}"></div>
       <div class="actions"></div>
       <div class="name">${esc(t.name)}</div>
-      <div class="meta">${plural(t.lessons.length, "lesson")} · ${plural(cards, "flashcard")} · ${plural((t.links || []).length, "link")}</div>`;
+      <div class="meta">${plural(t.notes.length, "note")} · ${plural(t.mistakes.length, "mistake")} · ${plural(t.cards.length, "flashcard")}</div>`;
     tile.querySelector(".actions").append(...editButtons(t, "topic", () => {
       topics.splice(topics.indexOf(t), 1);
     }));
@@ -391,73 +398,16 @@ function renderTopics(subject, year) {
     grid.append(tile);
   });
   app.querySelector("#reviseYear").onclick = () =>
-    startRevise(`${subject} · ${year}`, topics.flatMap(t => t.lessons), app.querySelector("#incMistakes").checked);
+    startRevise(`${subject} · ${year}`, topics, app.querySelector("#incMistakes").checked);
   app.querySelector("#addForm").onsubmit = e => {
     e.preventDefault();
     const name = app.querySelector("#newName").value.trim();
     if (!name) return;
-    topics.push({ id: uid(), name, lessons: [] });
+    topics.push({ id: uid(), name, notes: [], mistakes: [], cards: [], links: [] });
     save();
     render();
     app.querySelector("#newName").focus();
   };
-}
-
-function renderLessons(subject, year, topic) {
-  const s = subjectInfo(subject);
-  setCrumbs([{ label: "Subjects", go: [] }, { label: subject, go: [subject] }, { label: year, go: [subject, year] }, { label: topic.name }]);
-  const allCards = topic.lessons.flatMap(l => l.cards);
-  const allMistakes = topic.lessons.flatMap(l => l.mistakes);
-  const due = dueSummary(topic.lessons);
-  app.innerHTML = `<h2>${esc(topic.name)}</h2><p class="sub">${subject} · ${year}</p>
-    <div class="panel">
-      <p style="margin-top:0"><b>📅 Spaced repetition</b> — ${due.due
-        ? `<b>${plural(due.due, "card")}</b> due today${due.fresh ? ` (${due.fresh} new)` : ""}`
-        : due.total ? `nothing due today 🎉 Next card due ${niceDate(due.next)}.` : "add some flashcards to get started."}</p>
-      <div class="toolbar" style="margin:0">
-        <button class="btn good" id="reviseTopic">🧠 Revise due cards (${due.due})</button>
-        <button class="btn secondary" id="practiseAll">Practise all ${plural(allCards.length, "card")}</button>
-        <label class="check"><input type="checkbox" id="incMistakes" checked> Include things I got wrong (${allMistakes.length})</label>
-      </div>
-      <p class="hint" style="margin-bottom:0">Cards you know well wait longer before coming back. Mistakes and improving cards come back sooner.</p>
-    </div>
-    <h3 style="margin:0 0 10px">Lessons</h3>
-    <form class="add-row" id="addForm">
-      <input type="text" id="newName" placeholder="New lesson, e.g. Lesson 1 – Expanding brackets" maxlength="100">
-      <button class="btn" type="submit">+ Add lesson</button>
-    </form>
-    <div class="grid" id="grid"></div>
-    <h3 style="margin:28px 0 10px">🔗 Useful links</h3>
-    <div id="links"></div>`;
-  renderLinks(app.querySelector("#links"), topic);
-  const grid = app.querySelector("#grid");
-  if (!topic.lessons.length) grid.outerHTML = `<div class="empty">No lessons yet — add one above.</div>`;
-  topic.lessons.forEach(l => {
-    const tile = document.createElement("div");
-    tile.className = "tile";
-    tile.innerHTML = `<div class="stripe" style="background:${s.color}"></div>
-      <div class="actions"></div>
-      <div class="name">${esc(l.name)}</div>
-      <div class="meta">${plural((l.notes || []).length, "note")} · ${plural(l.mistakes.length, "mistake")} · ${plural(l.cards.length, "flashcard")}</div>`;
-    tile.querySelector(".actions").append(...editButtons(l, "lesson", () => {
-      topic.lessons.splice(topic.lessons.indexOf(l), 1);
-    }));
-    tile.onclick = () => go(subject, year, topic.id, l.id);
-    grid.append(tile);
-  });
-  app.querySelector("#addForm").onsubmit = e => {
-    e.preventDefault();
-    const name = app.querySelector("#newName").value.trim();
-    if (!name) return;
-    topic.lessons.push({ id: uid(), name, notes: [], mistakes: [], cards: [] });
-    save();
-    render();
-    app.querySelector("#newName").focus();
-  };
-  app.querySelector("#reviseTopic").onclick = () =>
-    startRevise(topic.name, topic.lessons, app.querySelector("#incMistakes").checked, false, { spaced: true });
-  app.querySelector("#practiseAll").onclick = () =>
-    startRevise(topic.name, topic.lessons, app.querySelector("#incMistakes").checked);
 }
 
 // ---------- Useful links (one list per topic) ----------
@@ -523,27 +473,28 @@ function renderLinks(box, topic) {
   };
 }
 
-function renderLesson(subject, year, topic, lesson) {
-  lesson.notes = lesson.notes || [];
-  setCrumbs([{ label: "Subjects", go: [] }, { label: subject, go: [subject] }, { label: year, go: [subject, year] },
-    { label: topic.name, go: [subject, year, topic.id] }, { label: lesson.name }]);
-  app.innerHTML = `<h2>${esc(lesson.name)}</h2><p class="sub">${subject} · ${year} · ${esc(topic.name)}</p>
+function renderTopic(subject, year, topic) {
+  topic.links = topic.links || [];
+  setCrumbs([{ label: "Subjects", go: [] }, { label: subject, go: [subject] }, { label: year, go: [subject, year] }, { label: topic.name }]);
+  app.innerHTML = `<h2>${esc(topic.name)}</h2><p class="sub">${subject} · ${year}</p>
     <div class="tabs">
-      <button class="tab" data-tab="notes">📒 Key notes (${lesson.notes.length})</button>
-      <button class="tab" data-tab="mistakes">❌ Mistakes (${lesson.mistakes.length})</button>
-      <button class="tab" data-tab="cards">🗂️ Flashcards (${lesson.cards.length})</button>
+      <button class="tab" data-tab="notes">📒 Key notes (${topic.notes.length})</button>
+      <button class="tab" data-tab="mistakes">❌ Mistakes (${topic.mistakes.length})</button>
+      <button class="tab" data-tab="cards">🗂️ Flashcards (${topic.cards.length})</button>
       <button class="tab" data-tab="revise">🧠 Revise</button>
+      <button class="tab" data-tab="links">🔗 Links (${topic.links.length})</button>
     </div>
     <div id="tabBody"></div>`;
   app.querySelectorAll(".tab").forEach(b => {
-    b.classList.toggle("active", b.dataset.tab === lessonTab);
-    b.onclick = () => { lessonTab = b.dataset.tab; editingId = null; render(); };
+    b.classList.toggle("active", b.dataset.tab === topicTab);
+    b.onclick = () => { topicTab = b.dataset.tab; editingId = null; render(); };
   });
   const body = app.querySelector("#tabBody");
-  if (lessonTab === "notes") renderNotes(body, lesson);
-  else if (lessonTab === "mistakes") renderMistakes(body, lesson.mistakes, { lesson, empty: "Nothing here yet. Log anything you got wrong in this lesson so you can learn from it." });
-  else if (lessonTab === "cards") renderCards(body, lesson);
-  else renderReviseTab(body, lesson, topic, subject, year);
+  if (topicTab === "notes") renderNotes(body, topic);
+  else if (topicTab === "mistakes") renderMistakes(body, topic.mistakes, { topic, empty: "Nothing here yet. Log anything you got wrong in this topic so you can learn from it." });
+  else if (topicTab === "cards") renderCards(body, topic);
+  else if (topicTab === "links") renderLinks(body, topic);
+  else renderReviseTab(body, topic, subject, year);
 }
 
 // ---------- Notes ----------
@@ -571,19 +522,19 @@ function noteToCard(text) {
   const word = words.reduce((a, b) => (b.length > a.length ? b : a));
   return { q: "Fill in the blank:\n" + t.replace(word, "_____"), a: word + "\n\n" + t };
 }
-// Adds or updates the lesson flashcard linked to a note or mistake (source = "fromNote" / "fromMistake")
-function syncCard(lesson, source, id, made) {
+// Adds or updates the topic flashcard linked to a note or mistake (source = "fromNote" / "fromMistake")
+function syncCard(topic, source, id, made) {
   if (!made) return false;
-  const card = lesson.cards.find(c => c[source] === id);
+  const card = topic.cards.find(c => c[source] === id);
   if (card) {
     if (card.q !== made.q || card.a !== made.a) Object.assign(card, made, { known: false, level: null });
   } else {
-    lesson.cards.push({ id: uid(), q: made.q, a: made.a, known: false, [source]: id });
+    topic.cards.push({ id: uid(), q: made.q, a: made.a, known: false, [source]: id });
   }
   return true;
 }
-function syncNoteCard(lesson, note) {
-  return syncCard(lesson, "fromNote", note.id, noteToCard(note.text));
+function syncNoteCard(topic, note) {
+  return syncCard(topic, "fromNote", note.id, noteToCard(note.text));
 }
 function mistakeToCard(m) {
   return {
@@ -591,13 +542,13 @@ function mistakeToCard(m) {
     a: (m.right || "(no correct answer written yet)") + (m.how ? "\n\nHow to work it out:\n" + m.how : ""),
   };
 }
-function syncMistakeCard(lesson, m) {
-  return syncCard(lesson, "fromMistake", m.id, mistakeToCard(m));
+function syncMistakeCard(topic, m) {
+  return syncCard(topic, "fromMistake", m.id, mistakeToCard(m));
 }
 
-function renderNotes(body, lesson) {
-  const editing = lesson.notes.find(n => n.id === editingId);
-  const missing = lesson.notes.filter(n => !lesson.cards.some(c => c.fromNote === n.id)).length;
+function renderNotes(body, topic) {
+  const editing = topic.notes.find(n => n.id === editingId);
+  const missing = topic.notes.filter(n => !topic.cards.some(c => c.fromNote === n.id)).length;
   body.innerHTML = `<form class="panel" id="form">
       <label class="check" style="margin-bottom:4px">${editing ? "Edit note" : "Key note"}</label>
       <textarea id="text" placeholder="e.g. Photosynthesis: plants use light to turn CO₂ and water into glucose and oxygen"></textarea>
@@ -614,22 +565,22 @@ function renderNotes(body, lesson) {
   const textEl = body.querySelector("#text");
   if (editing) { textEl.value = editing.text; textEl.focus(); }
   const list = body.querySelector("#list");
-  if (!lesson.notes.length) list.innerHTML = `<div class="empty">No notes yet. Write down the key points from this lesson.</div>`;
-  lesson.notes.forEach(n => {
-    const hasCard = lesson.cards.some(c => c.fromNote === n.id);
+  if (!topic.notes.length) list.innerHTML = `<div class="empty">No notes yet. Write down the key points from this topic.</div>`;
+  topic.notes.forEach(n => {
+    const hasCard = topic.cards.some(c => c.fromNote === n.id);
     const el = document.createElement("div");
     el.className = "item";
     el.innerHTML = `<div class="body"><div>${esc(n.text)}</div>
       <div style="margin-top:6px">${hasCard ? '<span class="badge known">🗂️ flashcard made</span>' : ""}</div></div>`;
     if (!hasCard) el.append(iconButton("🗂️", "Make flashcard", () => {
-      if (!syncNoteCard(lesson, n)) return alert("Couldn't make a flashcard from that note — try writing it as 'Word: meaning'.");
+      if (!syncNoteCard(topic, n)) return alert("Couldn't make a flashcard from that note — try writing it as 'Word: meaning'.");
       save(); render();
     }));
     el.append(
       iconButton("✏️", "Edit", () => { editingId = n.id; render(); }),
       iconButton("🗑️", "Delete", () => {
         if (!confirm("Delete this note? (Any flashcard made from it stays.)")) return;
-        lesson.notes.splice(lesson.notes.indexOf(n), 1);
+        topic.notes.splice(topic.notes.indexOf(n), 1);
         save(); render();
       }));
     list.append(el);
@@ -637,7 +588,7 @@ function renderNotes(body, lesson) {
   if (editing) body.querySelector("#cancel").onclick = () => { editingId = null; render(); };
   if (missing) body.querySelector("#makeAll").onclick = () => {
     let made = 0;
-    lesson.notes.forEach(n => { if (!lesson.cards.some(c => c.fromNote === n.id) && syncNoteCard(lesson, n)) made++; });
+    topic.notes.forEach(n => { if (!topic.cards.some(c => c.fromNote === n.id) && syncNoteCard(topic, n)) made++; });
     save(); render();
     alert(`Made ${plural(made, "flashcard")}! Check the Flashcards tab.`);
   };
@@ -647,16 +598,16 @@ function renderNotes(body, lesson) {
     if (!text) return textEl.focus();
     let note = editing;
     if (note) note.text = text;
-    else lesson.notes.push(note = { id: uid(), text });
+    else topic.notes.push(note = { id: uid(), text });
     // Keep an existing note's flashcard up to date when the note is edited
-    if (body.querySelector("#auto").checked || lesson.cards.some(c => c.fromNote === note.id)) syncNoteCard(lesson, note);
+    if (body.querySelector("#auto").checked || topic.cards.some(c => c.fromNote === note.id)) syncNoteCard(topic, note);
     editingId = null;
     save(); render();
     app.querySelector("#text").focus();
   };
 }
 
-// ---------- Mistakes (used by lessons and homework) ----------
+// ---------- Mistakes (used by topics and homework) ----------
 const CATEGORIES = {
   dontknow: { label: "Didn't know",          icon: "🤔", color: "#d64545" },
   silly:    { label: "Silly mistake",        icon: "🙈", color: "#c98a00" },
@@ -686,8 +637,8 @@ function renderMistakes(body, mistakes, opts) {
   const names = [...new Set(mistakes.map(m => m.hw).filter(Boolean))];
   const counts = { all: mistakes.length };
   Object.keys(CATEGORIES).forEach(k => counts[k] = mistakes.filter(m => m.cat === k).length);
-  const hasCard = m => opts.lesson && opts.lesson.cards.some(c => c.fromMistake === m.id);
-  const missing = opts.lesson ? mistakes.filter(m => !hasCard(m)).length : 0;
+  const hasCard = m => opts.topic && opts.topic.cards.some(c => c.fromMistake === m.id);
+  const missing = opts.topic ? mistakes.filter(m => !hasCard(m)).length : 0;
   body.innerHTML = `<form class="panel" id="form">
       ${editing ? `<p style="margin:0 0 10px"><b>✏️ Editing mistake</b></p>` : ""}
       <div class="form-grid">
@@ -709,7 +660,7 @@ function renderMistakes(body, mistakes, opts) {
       <div class="toolbar" style="margin:10px 0 0">
         <button class="btn" type="submit">${editing ? "Save changes" : "+ Add mistake"}</button>
         ${editing ? `<button class="btn secondary" type="button" id="cancel">Cancel</button>` : ""}
-        ${opts.lesson ? `<label class="check"><input type="checkbox" id="auto" checked> Make a flashcard from this mistake automatically</label>` : ""}
+        ${opts.topic ? `<label class="check"><input type="checkbox" id="auto" checked> Make a flashcard from this mistake automatically</label>` : ""}
       </div>
     </form>
     ${missing ? `<div class="toolbar"><button class="btn good" id="makeAll">✨ Make flashcards from ${plural(missing, "mistake")} without one</button></div>` : ""}
@@ -757,11 +708,11 @@ function renderMistakes(body, mistakes, opts) {
       list.append(h, ...items.map(m => mistakeItem(m, mistakes)));
     });
   } else {
-    sorted.forEach(m => list.append(mistakeItem(m, mistakes, opts.lesson)));
+    sorted.forEach(m => list.append(mistakeItem(m, mistakes, opts.topic)));
   }
   if (missing) $("#makeAll").onclick = () => {
     let made = 0;
-    mistakes.forEach(m => { if (!hasCard(m) && syncMistakeCard(opts.lesson, m)) made++; });
+    mistakes.forEach(m => { if (!hasCard(m) && syncMistakeCard(opts.topic, m)) made++; });
     save(); render();
     alert(`Made ${plural(made, "flashcard")}! Check the Flashcards tab.`);
   };
@@ -782,16 +733,16 @@ function renderMistakes(body, mistakes, opts) {
     if (m) Object.assign(m, fields);
     else mistakes.push(m = { id: uid(), ...fields });
     // Keep an existing mistake's flashcard up to date when the mistake is edited
-    if (opts.lesson && ($("#auto").checked || hasCard(m))) syncMistakeCard(opts.lesson, m);
+    if (opts.topic && ($("#auto").checked || hasCard(m))) syncMistakeCard(opts.topic, m);
     editingId = null;
     save(); render();
     app.querySelector("#wrong").focus();
   };
 }
 
-// lesson is given for lesson mistakes, which can have a linked flashcard
-function mistakeItem(m, owner, lesson) {
-  const hasCard = lesson && lesson.cards.some(c => c.fromMistake === m.id);
+// topic is given for topic mistakes, which can have a linked flashcard
+function mistakeItem(m, owner, topic) {
+  const hasCard = topic && topic.cards.some(c => c.fromMistake === m.id);
   const el = document.createElement("div");
   el.className = "item";
   el.innerHTML = `<div class="body">
@@ -804,8 +755,8 @@ function mistakeItem(m, owner, lesson) {
       ${m.how ? `<div class="label" style="margin-top:8px">🤔 How to work it out</div><div>${esc(m.how)}</div>`
               : `<div class="hint" style="margin:8px 0 0">⚠️ How do you work it out? Tap ✏️ to add the steps.</div>`}
     </div>`;
-  if (lesson && !hasCard) el.append(iconButton("🗂️", "Make flashcard", () => {
-    syncMistakeCard(lesson, m);
+  if (topic && !hasCard) el.append(iconButton("🗂️", "Make flashcard", () => {
+    syncMistakeCard(topic, m);
     save(); render();
   }));
   el.append(
@@ -833,7 +784,7 @@ function renderHomework(subject) {
     startRevise("Homework mistakes", [{ cards: [], mistakes }], true);
 }
 
-function renderCards(body, lesson) {
+function renderCards(body, topic) {
   body.innerHTML = `<form class="panel" id="form">
       <div class="form-grid">
         <div><label>Front (question)</label><textarea id="q" placeholder="e.g. What is the formula for the area of a circle?"></textarea></div>
@@ -843,8 +794,8 @@ function renderCards(body, lesson) {
     </form>
     <div id="list"></div>`;
   const list = body.querySelector("#list");
-  if (!lesson.cards.length) list.innerHTML = `<div class="empty">No flashcards yet. Type a question and answer above.</div>`;
-  lesson.cards.forEach(c => {
+  if (!topic.cards.length) list.innerHTML = `<div class="empty">No flashcards yet. Type a question and answer above.</div>`;
+  topic.cards.forEach(c => {
     const el = document.createElement("div");
     el.className = "item";
     el.innerHTML = `<div class="body">
@@ -861,7 +812,7 @@ function renderCards(body, lesson) {
     });
     const del = iconButton("🗑️", "Delete", () => {
       if (!confirm("Delete this flashcard?")) return;
-      lesson.cards.splice(lesson.cards.indexOf(c), 1);
+      topic.cards.splice(topic.cards.indexOf(c), 1);
       save(); render();
     });
     el.append(edit, del);
@@ -872,20 +823,18 @@ function renderCards(body, lesson) {
     const q = body.querySelector("#q").value.trim();
     const a = body.querySelector("#a").value.trim();
     if (!q) return body.querySelector("#q").focus();
-    lesson.cards.push({ id: uid(), q, a, known: false });
+    topic.cards.push({ id: uid(), q, a, known: false });
     save(); render();
     app.querySelector("#q").focus();
   };
 }
 
-// Revise one lesson, the whole topic so far, or every topic in the year
-let reviseScope = "lesson";
-function renderReviseTab(body, lesson, topic, subject, year) {
-  const yearLessons = topicsFor(subject, year).flatMap(t => t.lessons);
+// Revise this topic (spaced repetition) or every topic in the year
+let reviseScope = "topic";
+function renderReviseTab(body, topic, subject, year) {
   const scopes = {
-    lesson: { icon: "📄", label: "This lesson",          name: lesson.name,                 lessons: [lesson] },
-    topic:  { icon: "📚", label: "Whole topic so far",   name: topic.name,                  lessons: topic.lessons, spaced: true },
-    year:   { icon: "🎓", label: `Whole of ${year}`,     name: `${subject} · ${year}`,      lessons: yearLessons },
+    topic: { icon: "📚", label: "This topic",        name: topic.name,             topics: [topic], spaced: true },
+    year:  { icon: "🎓", label: `Whole of ${year}`,  name: `${subject} · ${year}`, topics: topicsFor(subject, year) },
   };
   body.innerHTML = `<div class="panel">
       <p style="margin-top:0"><b>What do you want to revise?</b></p>
@@ -894,27 +843,34 @@ function renderReviseTab(body, lesson, topic, subject, year) {
         <label class="check"><input type="checkbox" id="incMistakes" checked> Include things I got wrong</label>
         <label class="check"><input type="checkbox" id="onlyUnknown"> Only cards I'm not confident with yet</label>
       </div>
-      <p class="hint">Mistakes and improving cards come up more often. Click a card to flip it, then say whether you got it right.</p>
-      <button class="btn good" id="go">Start revising</button>
+      <p class="hint">${scopes[reviseScope].spaced
+        ? "Spaced repetition: only cards that are due come up. Cards you know well wait longer before coming back; mistakes and improving cards come back sooner."
+        : "Mistakes and improving cards come up more often."} Click a card to flip it, then say whether you got it right.</p>
+      <div class="toolbar" style="margin:0">
+        <button class="btn good" id="go">Start revising</button>
+        ${scopes[reviseScope].spaced ? `<button class="btn secondary" id="all">Practise every card instead</button>` : ""}
+      </div>
     </div>`;
   const grid = body.querySelector("#scopes");
   Object.entries(scopes).forEach(([key, sc]) => {
-    const cards = sc.lessons.reduce((n, l) => n + l.cards.length, 0);
-    const mistakes = sc.lessons.reduce((n, l) => n + l.mistakes.length, 0);
+    const cards = sc.topics.reduce((n, t) => n + t.cards.length, 0);
+    const mistakes = sc.topics.reduce((n, t) => n + t.mistakes.length, 0);
     const tile = document.createElement("div");
     tile.className = "tile";
     if (key === reviseScope) tile.style.cssText = "border:2px solid var(--accent);background:rgba(79,107,237,0.08)";
     tile.innerHTML = `<div class="icon">${sc.icon}</div><div class="name">${sc.label}</div>
       <div class="meta">${esc(sc.name)}</div>
-      <div class="meta">${plural(cards, "flashcard")} · ${plural(mistakes, "mistake")}${key === "lesson" ? "" : ` · ${plural(sc.lessons.length, "lesson")}`}</div>
-      ${sc.spaced ? `<div class="meta" style="color:var(--text)">📅 Spaced repetition: <b>${dueSummary(sc.lessons).due} due today</b></div>` : ""}`;
+      <div class="meta">${plural(cards, "flashcard")} · ${plural(mistakes, "mistake")}${key === "year" ? ` · ${plural(sc.topics.length, "topic")}` : ""}</div>
+      ${sc.spaced ? `<div class="meta" style="color:var(--text)">📅 Spaced repetition: <b>${dueSummary(sc.topics).due} due today</b></div>` : ""}`;
     tile.onclick = () => { reviseScope = key; render(); };
     grid.append(tile);
   });
+  const opts = () => [body.querySelector("#incMistakes").checked, body.querySelector("#onlyUnknown").checked];
   body.querySelector("#go").onclick = () => {
     const sc = scopes[reviseScope];
-    startRevise(sc.name, sc.lessons, body.querySelector("#incMistakes").checked, body.querySelector("#onlyUnknown").checked, { spaced: sc.spaced });
+    startRevise(sc.name, sc.topics, ...opts(), { spaced: sc.spaced });
   };
+  if (scopes[reviseScope].spaced) body.querySelector("#all").onclick = () => startRevise(topic.name, [topic], ...opts());
 }
 
 // ---------- Shared bits ----------
@@ -970,10 +926,10 @@ function dueText(item) {
   return days === 1 ? "📅 due tomorrow" : `📅 due in ${days} days`;
 }
 
-// Everything that could go in a round for these lessons
-function deckItems(lessons, includeMistakes, onlyUnknown) {
+// Everything that could go in a round for these topics
+function deckItems(topics, includeMistakes, onlyUnknown) {
   const items = [];
-  lessons.forEach(l => {
+  topics.forEach(l => {
     l.cards.forEach(c => {
       if (!onlyUnknown || c.level !== "confident")
         items.push({ kind: "card", front: c.q, back: c.a, ref: c, isMistake: !!c.fromMistake });
@@ -990,8 +946,8 @@ function deckItems(lessons, includeMistakes, onlyUnknown) {
   });
   return items;
 }
-function dueSummary(lessons) {
-  const items = deckItems(lessons, true, false);
+function dueSummary(topics) {
+  const items = deckItems(topics, true, false);
   const due = items.filter(it => isDue(it.ref));
   const later = items.filter(it => !isDue(it.ref)).map(it => it.ref.srs.due).sort();
   return { due: due.length, fresh: due.filter(it => !it.ref.srs).length, next: later[0] || null, total: items.length };
@@ -1016,14 +972,14 @@ function weightedDeck(items) {
 }
 
 // opts.spaced: only cards that are due (spaced repetition); otherwise every card, weighted
-function startRevise(title, lessons, includeMistakes, onlyUnknown = false, opts = {}) {
-  const items = deckItems(lessons, includeMistakes, onlyUnknown);
+function startRevise(title, topics, includeMistakes, onlyUnknown = false, opts = {}) {
+  const items = deckItems(topics, includeMistakes, onlyUnknown);
   if (!items.length) {
     alert(onlyUnknown ? "You're confident with all of these cards already — nice! Untick 'Only cards I'm not confident with yet' to go again."
                       : "There's nothing to revise yet. Add some flashcards first!");
     return;
   }
-  const restart = () => startRevise(title, lessons, includeMistakes, onlyUnknown, opts);
+  const restart = () => startRevise(title, topics, includeMistakes, onlyUnknown, opts);
   if (opts.spaced) {
     const due = items.filter(it => isDue(it.ref));
     if (!due.length) {
@@ -1260,8 +1216,8 @@ function dayLevels(day) {
 // Where every flashcard stands right now, across all subjects
 function allCardLevels() {
   const counts = { confident: 0, improving: 0, untried: 0 };
-  SUBJECTS.forEach(s => Object.values(data[s.name] || {}).forEach(topics => topics.forEach(t => t.lessons.forEach(l =>
-    l.cards.forEach(c => counts[LEVELS[c.level] ? c.level : "untried"]++)))));
+  SUBJECTS.forEach(s => Object.values(data[s.name] || {}).forEach(topics => topics.forEach(t =>
+    t.cards.forEach(c => counts[LEVELS[c.level] ? c.level : "untried"]++))));
   return counts;
 }
 
@@ -1369,13 +1325,13 @@ function showTip(e, text) {
 }
 function hideTip() { tip.style.display = "none"; }
 
-// Screens where you're actually learning: answering flashcards, and a lesson's notes,
+// Screens where you're actually learning: answering flashcards, and a topic's notes,
 // mistakes and flashcards tabs, plus homework mistakes. Menus, links and scores don't count.
 function isLearning() {
   if (overlay) return !!overlay.querySelector("#fc");
-  const [subject, year, topicId, lessonId] = route();
+  const [subject, year, topicId] = route();
   if (year === "homework") return true;
-  return !!lessonId && ["notes", "mistakes", "cards"].includes(lessonTab);
+  return !!topicId && ["notes", "mistakes", "cards"].includes(topicTab);
 }
 function timerCounting() {
   return isLearning() && document.visibilityState === "visible" && Date.now() - lastActivity < IDLE_AFTER;
@@ -1436,7 +1392,7 @@ document.getElementById("importFile").onchange = e => {
       const parsed = JSON.parse(text);
       if (typeof parsed !== "object" || !parsed) throw new Error();
       if (!confirm("Restoring will replace everything currently saved. Continue?")) return;
-      data = parsed;
+      data = migrate(parsed);
       save();
       go();
       render();
