@@ -264,6 +264,8 @@
   .bs .sq.sunk { background: #d64545; }
   .bs .sq.miss { background: var(--miss); }
   .bs .sq.last { box-shadow: 0 0 0 3px #f5c400 inset; }
+  /* The square/column you've picked, while its question is showing */
+  .bs .sq.chosen, .ttt button.chosen, .c4 .slot.chosen { box-shadow: 0 0 0 4px #ff4fd8 inset; background: #ff9ff0; }
   .bs-key { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 14px; font-size: 0.85rem; color: var(--muted); }
   .bs-key > span { display: flex; align-items: center; gap: 5px; }
   .bs-key .sq { width: 22px; height: 22px; border-radius: 4px; background: var(--sea); display: inline-flex; align-items: center; justify-content: center; font-size: 0.75rem; }
@@ -1301,7 +1303,12 @@ function startGame(kind, items, levelKey, title) {
     cpuKnows: () => Math.random() < DIFFICULTY[levelKey].skill,
     cpuSmart: () => Math.random() < DIFFICULTY[levelKey].tactics,
     cpuBest: DIFFICULTY[levelKey].best,
-    ask: why => askQuestion(game, game.next(), why),
+    // back: label for a "go back" button (before the answer is shown). Going back resolves null and
+    // keeps the same question for next time, so it can't be used to skip a hard card.
+    ask: (why, back) => {
+      const item = game.pending || game.next();
+      return askQuestion(game, item, why, back).then(r => { game.pending = r === null ? item : null; return r; });
+    },
     // Shows a button under the status line and waits for it to be pressed
     button: label => new Promise(r => {
       const b = document.createElement("button");
@@ -1317,8 +1324,9 @@ function startGame(kind, items, levelKey, title) {
   ({ snakes: playSnakes, noughts: playNoughts, connect: playConnect, battle: playBattle })[kind](game);
 }
 
-// The flashcard pop-up used by every game. Resolves true if you got it right.
-function askQuestion(game, item, why) {
+// The flashcard pop-up used by every game. Resolves true if you got it right, false if not,
+// or null if you pressed the back button (only offered before the answer is shown).
+function askQuestion(game, item, why, back) {
   return new Promise(resolve => {
     const box = document.createElement("div");
     box.className = "qmodal";
@@ -1329,6 +1337,7 @@ function askQuestion(game, item, why) {
         <div class="qfront">${esc(item.front)}</div>
         <div class="qback" hidden><div class="qtag">${mistake ? "✅ Correct answer" : "Answer"}</div>${esc(item.back)}</div>
         <div class="answer-btns" style="justify-content:center;flex-wrap:wrap">
+          ${back ? `<button class="btn secondary" id="qBack">${back}</button>` : ""}
           <button class="btn" id="qShow">Show answer</button>
           <button class="btn danger" id="qNo" hidden>✗ Still learning</button>
           <button class="btn good" id="qYes" hidden>✓ Got it</button>
@@ -1353,6 +1362,7 @@ function askQuestion(game, item, why) {
       $("#qClock").classList.toggle("slow", secs > CONFIDENT_SECONDS);
       $(".qback").hidden = false;
       $("#qShow").hidden = true;
+      if (back) $("#qBack").hidden = true;
       $("#qNo").hidden = $("#qYes").hidden = false;
       $("#qHint").textContent = "Did you get it right? (← still learning · → got it)";
     };
@@ -1365,14 +1375,24 @@ function askQuestion(game, item, why) {
       box.remove();
       resolve(gotIt);
     };
+    // Nothing is saved when you go back: the question wasn't answered
+    const goBack = () => {
+      if (secs !== null) return;
+      clearInterval(clock);
+      document.removeEventListener("keydown", keys);
+      box.remove();
+      resolve(null);
+    };
     const keys = e => {
       if (!box.isConnected) return document.removeEventListener("keydown", keys);
-      if (e.key === " " || e.key === "Enter") { e.preventDefault(); reveal(); }
+      if (back && e.key === "Escape") { e.preventDefault(); e.stopPropagation(); goBack(); }
+      else if (e.key === " " || e.key === "Enter") { e.preventDefault(); reveal(); }
       else if (secs !== null && e.key === "ArrowRight") finish(true);
       else if (secs !== null && e.key === "ArrowLeft") finish(false);
     };
     document.addEventListener("keydown", keys);
     $("#qShow").onclick = reveal;
+    if (back) $("#qBack").onclick = goBack;
     $("#qYes").onclick = () => finish(true);
     $("#qNo").onclick = () => finish(false);
   });
@@ -1578,7 +1598,10 @@ async function playNoughts(game) {
     if (turn === "you") {
       game.status("Your turn — tap a square to claim");
       const i = await new Promise(r => { pick = r; });
-      if (await game.ask("Get it right to claim the square ✖️")) { cells[i] = "X"; game.status("✖️ Square claimed!"); }
+      grid.children[i].classList.add("chosen");
+      const ok = await game.ask("Get it right to claim the square ✖️", "↩ Pick a different square");
+      if (ok === null) { draw(); continue; }
+      if (ok) { cells[i] = "X"; game.status("✖️ Square claimed!"); }
       else game.status("❌ Missed it — the square stays empty.");
     } else {
       game.status("🤖 The computer is answering a question…");
@@ -1643,7 +1666,10 @@ async function playConnect(game) {
     if (turn === "you") {
       game.status("Your turn — tap a column to drop your counter");
       const col = await new Promise(r => { pick = r; });
-      if (await game.ask("Get it right to drop your counter 🔴")) { cells[lowest(col)] = "you"; game.status("🔴 Counter dropped!"); }
+      grid.children[lowest(col)].classList.add("chosen");
+      const ok = await game.ask("Get it right to drop your counter 🔴", "↩ Pick a different column");
+      if (ok === null) { draw(); continue; }
+      if (ok) { cells[lowest(col)] = "you"; game.status("🔴 Counter dropped!"); }
       else game.status("❌ Missed it — no counter this turn.");
     } else {
       game.status("🤖 The computer is answering a question…");
@@ -1811,8 +1837,11 @@ async function playBattle(game) {
     if (turn === "you") {
       game.status("Your turn — tap a square on the computer's sea");
       const i = await new Promise(r => { pick = r; });
+      game.board.querySelector("#enemy").children[i].classList.add("chosen");
+      const ok = await game.ask("Get it right to fire 🚀", "↩ Pick a different square");
+      if (ok === null) { draw(); continue; }
       let shot = { msg: "❌ Missed the question — your shot goes wide." };
-      if (await game.ask("Get it right to fire 🚀")) shot = fire("you", i);
+      if (ok) shot = fire("you", i);
       game.status(shot.msg);
       if (allSunk("cpu")) { await game.wait(1800); return game.end("win"); }
       // Give a sinking longer on screen before the computer's turn
