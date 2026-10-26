@@ -1227,7 +1227,7 @@ function closeRevise() {
 // the difficulty sets both how often it "knows" an answer (skill) and how well it plays:
 // tactics = chance of a sensible move (win, block...) rather than a random one, best = its strongest play.
 const GAMES = {
-  snakes:  { icon: "🐍", name: "Snakes & Ladders",  about: "Roll the dice, then answer to move. Land on a ladder and answer to climb it; land on a snake and answer to escape it — watch out for the giant red ones! First to 100 wins." },
+  snakes:  { icon: "🐍", name: "Snakes & Ladders",  about: "Roll the dice, then answer to move. Land on a ladder and answer to climb it. Land on a snake and down you go — no escape, and watch out for the giant red ones! First to 100 wins." },
   noughts: { icon: "⭕", name: "Noughts & Crosses", about: "Pick a square, then answer to claim it. Three in a row wins." },
   connect: { icon: "🔴", name: "Connect Four",      about: "Pick a column, then answer to drop your counter. Four in a row wins." },
   battle:  { icon: "🚢", name: "Battleships",       about: "Pick a square to fire at, then answer to take the shot. Sink all 6 of the computer's ships first." },
@@ -1633,17 +1633,24 @@ async function playSnakes(game) {
       game.status(`${who[turn]} ${you ? "move" : "moves"} ${plural(n, "square")}…`);
       for (let k = 0; k < n; k++) { pos[turn]++; draw(); await game.wait(160); }
       const ladder = LADDERS[pos[turn]], snake = SNAKES[pos[turn]];
-      if (ladder || snake) {
+      if (snake) {
+        // No question on a snake: there's no escaping it, down you go
+        const giant = pos[turn] - snake >= BIG_JUMP;
+        game.status(`${giant ? "😱 A GIANT snake!" : "🐍 A snake!"} ${who[turn]} ${you ? "slide" : "slides"} ${giant ? "all the way " : ""}down to <b>${snake}</b>.`);
+        await game.wait(700);
+        const tok = game.board.querySelector(you ? "#tokYou" : "#tokCpu");
+        tok.style.transition = "left 1.2s ease-in, top 1.2s ease-in"; // a slow slide down the snake
+        pos[turn] = snake;
+        draw();
+        await game.wait(1500);
+        tok.style.transition = "";
+      } else if (ladder) {
         let right;
-        const huge = ladder && ladder - pos[turn] >= BIG_JUMP, giant = snake && pos[turn] - snake >= BIG_JUMP;
-        if (you) right = await game.ask(ladder
-          ? `${huge ? "🚀 A HUGE ladder" : "🪜 A ladder"} up to ${ladder}! Get it right to climb it`
-          : `${giant ? "😱 A GIANT snake" : "🐍 A snake"} down to ${snake}! Get it right to escape it`);
-        else { game.status(`🤖 The computer landed on a ${ladder ? "ladder 🪜" : "snake 🐍"} and is answering…`); await game.wait(1000); right = game.cpuKnows(); }
-        if (ladder && right) { pos[turn] = ladder; game.status(`${huge ? "🚀" : "🪜"} ${who[turn]} climbed to <b>${ladder}</b>!`); }
-        else if (ladder) game.status(`🪜 ${who[turn]} missed the ladder.`);
-        else if (right) game.status(`🐍 ${who[turn]} escaped the snake!`);
-        else { pos[turn] = snake; game.status(`${giant ? "😱" : "🐍"} ${who[turn]} slid ${giant ? "all the way " : ""}down to <b>${snake}</b>.`); }
+        const huge = ladder - pos[turn] >= BIG_JUMP;
+        if (you) right = await game.ask(`${huge ? "🚀 A HUGE ladder" : "🪜 A ladder"} up to ${ladder}! Get it right to climb it`);
+        else { game.status("🤖 The computer landed on a ladder 🪜 and is answering…"); await game.wait(1000); right = game.cpuKnows(); }
+        if (right) { pos[turn] = ladder; game.status(`${huge ? "🚀" : "🪜"} ${who[turn]} climbed to <b>${ladder}</b>!`); }
+        else game.status(`🪜 ${who[turn]} missed the ladder.`);
         draw();
         await game.wait(1400);
       } else {
