@@ -1,7 +1,7 @@
 // Lets the app open with no internet connection.
 // Files are served from the cache straight away, then refreshed in the background,
 // so a new version shows up the next time the app is opened.
-const CACHE = "lesson-revision-v12";
+const CACHE = "lesson-revision-v13";
 const FILES = [
   "./",
   "./index.html",

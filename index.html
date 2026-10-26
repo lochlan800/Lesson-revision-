@@ -1481,7 +1481,10 @@ function randomOf(list) { return list[Math.floor(Math.random() * list.length)]; 
 
 // ---------- Snakes & Ladders ----------
 // Snakes that drop 40+ squares are "giant" (drawn in red); ladders that climb 40+ are "huge"
-const SNAKES  = { 25: 5, 40: 19, 54: 34, 69: 50, 77: 27, 84: 45, 87: 67, 93: 46, 98: 24 };
+const SNAKES  = { 17: 4, 31: 11, 39: 18, 62: 42, 74: 54, 76: 26, 93: 49, 96: 85, 98: 37 };
+// Which way each snake bends (1 or -1). Worked out by trying every combination and keeping the one
+// where the snakes stay furthest apart, so no two snakes overlap.
+const SNAKE_BENDS = { 17: -1, 31: 1, 39: 1, 62: 1, 74: 1, 76: 1, 93: 1, 96: 1, 98: -1 };
 const LADDERS = { 2: 56, 7: 32, 14: 35, 21: 63, 48: 91, 60: 97, 66: 88 };
 const BIG_JUMP = 40;
 
@@ -1507,12 +1510,12 @@ function slArt() {
       <path d="M${a.x - nx} ${a.y - ny}L${b.x - nx} ${b.y - ny}M${a.x + nx} ${a.y + ny}L${b.x + nx} ${b.y + ny}" class="rail"/>
       <path d="${rungs}" class="rung"/></g>`);
   });
-  Object.entries(SNAKES).forEach(([from, to], k) => {
+  Object.entries(SNAKES).forEach(([from, to]) => {
     const a = slSpot(+from), b = slSpot(to); // a = head, b = tail
     const len = Math.hypot(b.x - a.x, b.y - a.y);
     const nx = -(b.y - a.y) / len, ny = (b.x - a.x) / len;
-    // A big S-bend (alternating direction from snake to snake), with small wiggles along it
-    const bend = Math.min(16, len * 0.3) * (k % 2 ? 1 : -1);
+    // A big S-bend, with small wiggles along it
+    const bend = Math.min(16, len * 0.3) * (SNAKE_BENDS[from] || 1);
     const c1 = { x: a.x + (b.x - a.x) / 3 + nx * bend, y: a.y + (b.y - a.y) / 3 + ny * bend };
     const c2 = { x: a.x + (b.x - a.x) * 2 / 3 - nx * bend, y: a.y + (b.y - a.y) * 2 / 3 - ny * bend };
     const waves = Math.max(2, len / 9);
