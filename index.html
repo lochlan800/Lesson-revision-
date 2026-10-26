@@ -1326,14 +1326,15 @@ function startGame(kind, items, levelKey, title) {
   const me = overlay;
   overlay.innerHTML = `
     <div class="top"><b>${GAMES[kind].icon} ${GAMES[kind].name}</b><span class="ov-timer" id="ovTimer">${dailyTimerText()}</span><button class="btn secondary" id="exit">✕ Exit</button></div>
-    <div class="game game-live"><div class="status" id="gStatus"></div><div id="gBoard" style="width:100%;display:flex;flex-direction:column;align-items:center;gap:12px"></div></div>`;
+    <div class="game game-live"><div class="status" id="gStatus"><span id="gMsg"></span><span id="gAct"></span></div><div id="gBoard" style="width:100%;display:flex;flex-direction:column;align-items:center;gap:12px"></div></div>`;
   overlay.querySelector("#exit").onclick = () => { closeRevise(); render(); };
   const game = {
     asked: 0, right: 0,
     board: overlay.querySelector("#gBoard"),
     next: pickerFor(items),
     alive: () => overlay === me,
-    status: html => { const el = me.querySelector("#gStatus"); if (el) el.innerHTML = html; },
+    // Only the message part changes, so a button waiting to be pressed is never wiped out
+    status: html => { const el = me.querySelector("#gMsg"); if (el) el.innerHTML = html; },
     // Waits, but never carries on once the game has been closed
     wait: ms => new Promise(r => setTimeout(() => { if (overlay === me) r(); }, ms)),
     cpuKnows: () => Math.random() < DIFFICULTY[levelKey].skill,
@@ -1352,7 +1353,7 @@ function startGame(kind, items, levelKey, title) {
       b.style.marginLeft = "8px";
       b.textContent = label;
       b.onclick = () => { b.remove(); r(); };
-      me.querySelector("#gStatus").append(b);
+      me.querySelector("#gAct").append(b);
       b.focus();
     }),
     end: result => endGame(game, result, () => startGame(kind, items, levelKey, title)),
@@ -1480,8 +1481,8 @@ function randomOf(list) { return list[Math.floor(Math.random() * list.length)]; 
 
 // ---------- Snakes & Ladders ----------
 // Snakes that drop 40+ squares are "giant" (drawn in red); ladders that climb 40+ are "huge"
-const SNAKES  = { 25: 5, 32: 13, 47: 29, 54: 34, 64: 44, 76: 26, 89: 52, 93: 48, 99: 22 };
-const LADDERS = { 3: 58, 8: 30, 14: 33, 20: 61, 51: 91, 63: 97, 66: 85 };
+const SNAKES  = { 25: 5, 40: 19, 54: 34, 69: 50, 77: 27, 84: 45, 87: 67, 93: 46, 98: 24 };
+const LADDERS = { 2: 56, 7: 32, 14: 35, 21: 63, 48: 91, 60: 97, 66: 88 };
 const BIG_JUMP = 40;
 
 // Where square n sits on the board, in % from the top-left (square 1 is bottom-left)
@@ -1506,15 +1507,22 @@ function slArt() {
       <path d="M${a.x - nx} ${a.y - ny}L${b.x - nx} ${b.y - ny}M${a.x + nx} ${a.y + ny}L${b.x + nx} ${b.y + ny}" class="rail"/>
       <path d="${rungs}" class="rung"/></g>`);
   });
-  Object.entries(SNAKES).forEach(([from, to]) => {
+  Object.entries(SNAKES).forEach(([from, to], k) => {
     const a = slSpot(+from), b = slSpot(to); // a = head, b = tail
     const len = Math.hypot(b.x - a.x, b.y - a.y);
     const nx = -(b.y - a.y) / len, ny = (b.x - a.x) / len;
-    const waves = Math.max(1.5, len / 14);
+    // A big S-bend (alternating direction from snake to snake), with small wiggles along it
+    const bend = Math.min(16, len * 0.3) * (k % 2 ? 1 : -1);
+    const c1 = { x: a.x + (b.x - a.x) / 3 + nx * bend, y: a.y + (b.y - a.y) / 3 + ny * bend };
+    const c2 = { x: a.x + (b.x - a.x) * 2 / 3 - nx * bend, y: a.y + (b.y - a.y) * 2 / 3 - ny * bend };
+    const waves = Math.max(2, len / 9);
     const pts = [];
-    for (let k = 0; k <= 40; k++) {
-      const t = k / 40, wiggle = Math.sin(t * Math.PI * 2 * waves) * 2.2 * Math.sin(t * Math.PI);
-      pts.push(`${(a.x + (b.x - a.x) * t + nx * wiggle).toFixed(2)} ${(a.y + (b.y - a.y) * t + ny * wiggle).toFixed(2)}`);
+    for (let i = 0; i <= 60; i++) {
+      const t = i / 60, u = 1 - t;
+      const x = u * u * u * a.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * b.x;
+      const y = u * u * u * a.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * b.y;
+      const wiggle = Math.sin(t * Math.PI * 2 * waves) * 1.6 * Math.sin(t * Math.PI);
+      pts.push(`${(x + nx * wiggle).toFixed(2)} ${(y + ny * wiggle).toFixed(2)}`);
     }
     const giant = from - to >= BIG_JUMP;
     parts.push(`<g class="snake${giant ? " giant" : ""}">
@@ -1533,7 +1541,8 @@ async function playSnakes(game) {
       <div class="die-box" id="boxCpu"><div class="die cpu" id="dieCpu"></div><span>🤖 Computer's dice</span></div>
     </div>
     <div class="sl-wrap"><div class="sl-board"></div>${slArt()}<div class="sl-nums"></div><div class="sl-token" id="tokYou">🧑</div><div class="sl-token" id="tokCpu">🤖</div></div>
-    <div class="hint" style="margin:0">🧑 You: <b id="slYou">start</b> · 🤖 Computer: <b id="slCpu">start</b> · 🪜 ladder up · 🐍 snake down · <span style="color:#d64545">red = giant snake</span> · tap a square to see where it goes</div>`;
+    <div class="hint" style="margin:0">🧑 You: <b id="slYou">start</b> · 🤖 Computer: <b id="slCpu">start</b> · 🪜 ladder up · 🐍 snake down · <span style="color:#d64545">red = giant snake</span> · tap a square to see where it goes</div>
+    <div class="hint" id="slInfo" style="margin:0;min-height:1.2em"></div>`;
   const grid = game.board.querySelector(".sl-board");
   // Square 1 is bottom-left and the numbers snake back and forth up the board
   for (let row = 9; row >= 0; row--) for (let col = 0; col < 10; col++) {
@@ -1544,7 +1553,7 @@ async function playSnakes(game) {
     if (LADDERS[n]) cell.title = `Ladder up to ${LADDERS[n]}`;
     if (SNAKES[n]) cell.title = `${SNAKES[n] <= n - BIG_JUMP ? "Giant snake" : "Snake"} down to ${SNAKES[n]}`;
     // Tapping the start of a snake or ladder says where it goes
-    if (cell.title) cell.onclick = () => game.status(`${LADDERS[n] ? "🪜" : "🐍"} Square ${n}: ${cell.title.toLowerCase()}`);
+    if (cell.title) cell.onclick = () => { game.board.querySelector("#slInfo").innerHTML = `<b>${LADDERS[n] ? "🪜" : "🐍"} Square ${n}: ${cell.title.toLowerCase()}</b>`; };
     grid.append(cell);
     // Numbers go in a layer above the drawing so they stay readable
     const num = document.createElement("span");
