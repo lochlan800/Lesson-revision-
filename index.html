@@ -302,6 +302,9 @@
   .lcontrols { display: flex; gap: 12px; }
   .lcontrols .btn { min-width: 64px; font-size: 1.1rem; }
 
+  .tab.missing { border-style: dashed; color: var(--muted); }
+  .voice-pick { flex: 1; min-width: 0; max-width: 420px; padding: 10px; border-radius: 10px; border: 1px solid var(--border); background: var(--card); color: var(--text); font: inherit; }
+
   footer { text-align: center; color: var(--muted); font-size: 0.85rem; padding: 10px 16px 30px; }
   footer button { margin: 4px; }
 </style>
@@ -1238,20 +1241,65 @@ function closeRevise() {
 // Uses the device's own voice (works offline). Mistakes and improving cards come up more, as in the games.
 const LISTEN_PAUSES = [3, 5, 10];
 const LISTEN_SPEEDS = { slow: 0.8, normal: 1, fast: 1.2 };
-let listenScope = "topic", listenPause = 5, listenSpeed = "normal", listenAsk = false, listenVoice = "";
+let listenScope = "topic", listenPause = 5, listenSpeed = "normal", listenAsk = false, listenVoice = "", listenEsVoice = "";
+// In Spanish topics, which side of a card is in Spanish ("auto" works it out from the words)
+let listenEsSide = "auto";
+// The English accent to prefer; the best voice with that accent is picked
+let listenAccent = "en-GB";
+const ACCENTS = { "en-GB": "🇬🇧 UK", "en-US": "🇺🇸 American", "en-IN": "🇮🇳 Indian", "en-NG": "🇳🇬 Nigerian",
+                  "en-AU": "🇦🇺 Australian", "en-IE": "🇮🇪 Irish", "en-ZA": "🇿🇦 South African" };
+const hasAccent = accent => canSpeak() && speechSynthesis.getVoices().some(v => v.lang.replace("_", "-").toLowerCase() === accent.toLowerCase());
 
 const canSpeak = () => "speechSynthesis" in window && "SpeechSynthesisUtterance" in window;
-function englishVoices() {
+// Scores how natural a voice is likely to sound: higher-quality voices first, the preferred accent next,
+// and the novelty voices some computers have (Zarvox, Bubbles...) last
+const NOVELTY_VOICES = /albert|bad news|bahh|bells|boing|bubbles|cellos|deranged|good news|hysterical|jester|junior|kathy|organ|pipe organ|princess|ralph|superstar|trinoids|whisper|wobble|zarvox|fred|espeak/i;
+function voiceScore(v, accent) {
+  let score = 0;
+  if (new RegExp("^" + accent, "i").test(v.lang.replace("_", "-"))) score += 100; // the chosen accent always comes first
+  if (/natural|neural|premium/i.test(v.name)) score += 40;
+  if (/enhanced|siri/i.test(v.name)) score += 30;
+  if (/google|online|microsoft/i.test(v.name)) score += 15;
+  if (NOVELTY_VOICES.test(v.name)) score -= 100;
+  return score;
+}
+// Voices for a language ("en" or "es"), best first; accent is the one to prefer, e.g. "en-GB" or "es-ES"
+function voicesFor(lang, accent) {
   if (!canSpeak()) return [];
-  return speechSynthesis.getVoices().filter(v => /^en/i.test(v.lang))
-    .sort((a, b) => (/en-GB/i.test(b.lang) - /en-GB/i.test(a.lang)) || a.name.localeCompare(b.name));
+  return speechSynthesis.getVoices().filter(v => new RegExp("^" + lang, "i").test(v.lang))
+    .sort((a, b) => voiceScore(b, accent) - voiceScore(a, accent) || a.name.localeCompare(b.name));
+}
+// Best first for the chosen accent (or UK if this device has no voice with that accent)
+const englishVoices = () => voicesFor("en", hasAccent(listenAccent) ? listenAccent : "en-GB");
+const spanishVoices = () => voicesFor("es", "es-ES");
+// The voice to use: the one picked, or else the best one available
+const pickVoice = (voices, name) => voices.find(v => v.name === name) || voices[0] || null;
+function accentLabel(v) {
+  const region = (v.lang.split(/[-_]/)[1] || "").toUpperCase();
+  return { GB: "UK", US: "American", AU: "Australian", IE: "Irish", IN: "Indian", NG: "Nigerian", ZA: "South African", CA: "Canadian", NZ: "New Zealand",
+           ES: "Spain", MX: "Mexico", AR: "Argentina", CO: "Colombia" }[region] || region || v.lang;
+}
+// Does this text look like Spanish? Accented letters, ¿ ¡, or common Spanish words give it away
+const SPANISH_WORDS = new Set("el la los las un una unos unas es son está están estoy soy eres somos tengo tiene tienes hay de del que y en por para con sin muy pero porque cuando dónde donde qué cómo cuál quién también mi mis tu tus su sus nosotros vosotros ellos ellas usted ustedes yo él ella este esta estos estas ese esa aquí allí hoy mañana ayer bien mal gracias hola adiós señor señora llamo llamas llama vivo vives vive hablo hablas habla hace hacer tener ser estar voy vas va vamos fui era casa perro gato agua comida colegio instituto amigo amiga hermano hermana padre madre familia ciudad pueblo grande pequeño bueno buena buenos buenas mucho mucha poco poca todos todo nada algo siempre nunca días noches tardes".split(" "));
+const ENGLISH_WORDS = new Set("the and you your can is are was were it its to of in on at for with that this these those what how why when where who which do does did not needs need means mean have has had will would should could be been my me he she they we our their there here because about from into just only also than then".split(" "));
+function looksSpanish(text) {
+  const words = String(text).toLowerCase().match(/[a-záéíóúüñ]+/g) || [];
+  if (!words.length) return false;
+  let score = (String(text).match(/[áéíóúüñ¿¡]/gi) || []).length * 2;
+  words.forEach(w => { if (SPANISH_WORDS.has(w) || /(ción|ciones|dad|mente)$/.test(w)) score++; });
+  // A mostly-English sentence that mentions a Spanish word is still English
+  const english = words.filter(w => ENGLISH_WORDS.has(w)).length;
+  if (english >= score) return false;
+  return score >= 2 || (words.length <= 3 && score >= 1);
 }
 // Turns card text into something that sounds right: no emoji, and maths symbols said as words
-function speakable(text) {
-  return String(text)
+function speakable(text, lang = "en") {
+  const clean = String(text)
     .replace(/\p{Extended_Pictographic}|️/gu, "")
     .replace(/\s*\n+\s*/g, ". ").replace(/([.!?:;])\s*\./g, "$1") // a new line becomes a short pause
-    .replace(/_{3,}/g, " blank ")
+    .replace(/_{3,}/g, lang === "es" ? " ... " : " blank ");
+  if (lang === "es") return clean.replace(/\s+/g, " ").trim(); // the maths words below are English
+  return clean
     .replace(/²/g, " squared").replace(/³/g, " cubed")
     .replace(/×/g, " times ").replace(/÷/g, " divided by ").replace(/π/g, " pi ")
     .replace(/→|->/g, " goes to ").replace(/≈/g, " is about ").replace(/≠/g, " does not equal ")
@@ -1259,6 +1307,7 @@ function speakable(text) {
 }
 
 function renderListenTab(body, topic, subject, year) {
+  const spanish = subject === "Spanish";
   const scopes = {
     topic: { label: "📚 This topic",       name: topic.name,             topics: [topic] },
     year:  { label: `🎓 Whole of ${year}`, name: `${subject} · ${year}`, topics: topicsFor(subject, year) },
@@ -1276,8 +1325,20 @@ function renderListenTab(body, topic, subject, year) {
       <div class="tabs" id="lsPause" style="margin-bottom:12px">${LISTEN_PAUSES.map(n => `<button class="tab" data-v="${n}">${n} seconds</button>`).join("")}</div>
       <label class="check" style="margin-bottom:6px">Reading speed</label>
       <div class="tabs" id="lsSpeed" style="margin-bottom:12px">${Object.keys(LISTEN_SPEEDS).map(k => `<button class="tab" data-v="${k}">${k[0].toUpperCase() + k.slice(1)}</button>`).join("")}</div>
-      <label class="check" style="margin-bottom:6px">Voice</label>
-      <select id="lsVoice" style="width:100%;max-width:360px;padding:10px;border-radius:10px;border:1px solid var(--border);background:var(--card);color:var(--text);font:inherit;margin-bottom:12px"></select>
+      <label class="check" style="margin-bottom:6px">Accent</label>
+      <div class="tabs" id="lsAccent" style="margin-bottom:6px"></div>
+      <p class="hint" id="lsAccentNote" style="margin:0 0 12px"></p>
+      <label class="check" style="margin-bottom:6px">${spanish ? "English voice" : "Voice"}</label>
+      <div class="toolbar" style="margin-bottom:12px"><select id="lsVoice" class="voice-pick"></select><button class="btn secondary" id="lsTestEn">▶ Test</button></div>
+      ${spanish ? `<label class="check" style="margin-bottom:6px">Spanish voice</label>
+      <div class="toolbar" style="margin-bottom:12px"><select id="lsEsVoice" class="voice-pick"></select><button class="btn secondary" id="lsTestEs">▶ Test</button></div>
+      <label class="check" style="margin-bottom:6px">Which side of your cards is in Spanish?</label>
+      <div class="tabs" id="lsEsSide" style="margin-bottom:12px">${Object.entries({ auto: "🔎 Work it out", answer: "Answers", question: "Questions", both: "Both" })
+        .map(([k, l]) => `<button class="tab" data-v="${k}">${l}</button>`).join("")}</div>` : ""}
+      <p class="hint" style="margin:-4px 0 12px">The best-sounding voice your phone has is picked for you. For an even better one, download a high-quality voice:
+        <b>iPhone</b> — Settings › Accessibility › Spoken Content › Voices › English (and Spanish) › pick one marked Enhanced or Premium.
+        <b>Android</b> — Settings › Accessibility › Text-to-speech › Google › install voice data (English has India and Nigeria voices).
+        <b>Windows</b> — the Edge browser has natural Indian and Nigerian voices built in. Then come back and choose it here.</p>
       <label class="check" style="margin-bottom:14px"><input type="checkbox" id="lsAsk" ${listenAsk ? "checked" : ""}>
         After each answer, ask me if I got it (only when you're holding your phone — this updates your ⚡/📈 ratings)</label>
       <button class="btn good" id="lsGo">🎧 Start listening</button>
@@ -1290,26 +1351,61 @@ function renderListenTab(body, topic, subject, year) {
   pick("lsScope", listenScope, v => { listenScope = v; });
   pick("lsPause", listenPause, v => { listenPause = +v; });
   pick("lsSpeed", listenSpeed, v => { listenSpeed = v; });
-  // Voices can load a moment after the page does
-  const select = body.querySelector("#lsVoice");
+  if (spanish) pick("lsEsSide", listenEsSide, v => { listenEsSide = v; });
+  // Voices can load a moment after the page does. "Best available" is the top-ranked voice.
+  const fill = (select, voices, current, none) => {
+    if (!select) return;
+    select.innerHTML = voices.length
+      ? `<option value="">⭐ Best available (${esc(voices[0].name)}, ${accentLabel(voices[0])})</option>` +
+        voices.map(v => `<option value="${esc(v.name)}">${esc(v.name)} — ${accentLabel(v)}</option>`).join("")
+      : `<option value="">${none}</option>`;
+    select.value = voices.some(v => v.name === current) ? current : "";
+  };
+  // Accent buttons: ones this device has no voice for are marked, and picking one explains how to get it
+  const fillAccents = () => {
+    const box = body.querySelector("#lsAccent");
+    box.innerHTML = Object.entries(ACCENTS).map(([k, l]) =>
+      `<button class="tab${hasAccent(k) ? "" : " missing"}" data-v="${k}" title="${hasAccent(k) ? "" : "Not on this device yet"}">${l}</button>`).join("");
+    box.querySelectorAll(".tab").forEach(b => {
+      b.classList.toggle("active", b.dataset.v === listenAccent);
+      b.onclick = () => { listenAccent = b.dataset.v; listenVoice = ""; render(); };
+    });
+    const name = ACCENTS[listenAccent].split(" ").slice(1).join(" ");
+    body.querySelector("#lsAccentNote").innerHTML = hasAccent(listenAccent)
+      ? `The best ${name} voice on this device is picked for you.`
+      : `⚠️ This device doesn't have ${/^[AEIOU]/.test(name) ? "an" : "a"} ${name} voice yet, so a UK voice is used for now. See below for how to download one — it only takes a minute.`;
+  };
   const fillVoices = () => {
-    const voices = englishVoices();
-    select.innerHTML = `<option value="">Default voice</option>` + voices.map(v => `<option value="${esc(v.name)}">${esc(v.name)} (${esc(v.lang)})</option>`).join("");
-    select.value = voices.some(v => v.name === listenVoice) ? listenVoice : "";
+    fillAccents();
+    fill(body.querySelector("#lsVoice"), englishVoices(), listenVoice, "Default voice");
+    fill(body.querySelector("#lsEsVoice"), spanishVoices(), listenEsVoice, "No Spanish voice on this device — download one (see below)");
   };
   fillVoices();
-  speechSynthesis.onvoiceschanged = () => { if (select.isConnected) fillVoices(); };
-  select.onchange = () => { listenVoice = select.value; };
+  speechSynthesis.onvoiceschanged = () => { if (body.isConnected) fillVoices(); };
+  body.querySelector("#lsVoice").onchange = e => { listenVoice = e.target.value; };
+  const test = (text, voice, lang) => {
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.rate = LISTEN_SPEEDS[listenSpeed];
+    if (voice) u.voice = voice;
+    u.lang = voice ? voice.lang : lang;
+    speechSynthesis.speak(u);
+  };
+  body.querySelector("#lsTestEn").onclick = () => test("Hello! This is how your flashcards will sound.", pickVoice(englishVoices(), listenVoice), listenAccent);
+  if (spanish) {
+    body.querySelector("#lsEsVoice").onchange = e => { listenEsVoice = e.target.value; };
+    body.querySelector("#lsTestEs").onclick = () => test("¡Hola! Así sonarán tus tarjetas en español.", pickVoice(spanishVoices(), listenEsVoice), "es-ES");
+  }
   body.querySelector("#lsAsk").onchange = e => { listenAsk = e.target.checked; };
   body.querySelector("#lsGo").onclick = () => {
     const sc = scopes[listenScope];
     const items = deckItems(sc.topics, true, false);
     if (!items.length) return alert("There's nothing to listen to yet. Add some flashcards or mistakes first!");
-    startListening(items, sc.name);
+    startListening(items, sc.name, spanish);
   };
 }
 
-function startListening(items, title) {
+function startListening(items, title, spanish = false) {
   closeRevise();
   // One round: every card once, plus extra goes for mistakes and improving cards
   const next = questionPicker(items);
@@ -1341,20 +1437,37 @@ function startListening(items, title) {
     </div>`;
   const $ = sel => me.querySelector(sel);
   let index = 0, playing = true, run = 0, wakeLock = null;
-  const voice = englishVoices().find(v => v.name === listenVoice);
+  const voices = { en: pickVoice(englishVoices(), listenVoice), es: pickVoice(spanishVoices(), listenEsVoice) };
+  // Which language a side of a card is read in (Spanish only in Spanish topics)
+  const langOf = (side, text) => {
+    if (!spanish) return "en";
+    if (listenEsSide === "auto") return looksSpanish(text) ? "es" : "en";
+    return listenEsSide === "both" || listenEsSide === side ? "es" : "en";
+  };
+  // The app's own wording on a card (from mistakes and fill-in-the-blank notes) is always English
+  const SCAFFOLD = /^(❌ )?I got this wrong:$|^What's the right answer|^How to work it out:$|^Fill in the blank:$|^\(no correct answer written yet\)$/;
+  // Reads one side of a card line by line, so a Spanish answer with an English explanation sounds right
+  const sayCard = async (text, side, myRun) => {
+    for (const line of String(text).split(/\n+/).map(l => l.trim()).filter(Boolean)) {
+      if (myRun !== run) return;
+      await say(line, myRun, SCAFFOLD.test(line) ? "en" : langOf(side, line));
+    }
+  };
   // Keep the screen awake while listening, where the browser allows it
   if (navigator.wakeLock) navigator.wakeLock.request("screen").then(l => { wakeLock = l; }).catch(() => {});
   me.cleanup = () => { run++; speechSynthesis.cancel(); if (wakeLock) wakeLock.release().catch(() => {}); };
   $("#exit").onclick = () => { closeRevise(); render(); };
 
   // Speaks text (in short pieces, which some browsers need) and resolves when done or interrupted
-  const say = (text, myRun) => new Promise(resolve => {
-    const pieces = speakable(text).split(/(?<=[.!?;:])\s+/).filter(Boolean);
+  const say = (text, myRun, lang = "en") => new Promise(resolve => {
+    const pieces = speakable(text, lang).split(/(?<=[.!?;:])\s+/).filter(Boolean);
     const step = k => {
       if (myRun !== run || k >= pieces.length) return resolve();
       const u = new SpeechSynthesisUtterance(pieces[k]);
       u.rate = LISTEN_SPEEDS[listenSpeed];
-      if (voice) u.voice = voice; else u.lang = "en-GB";
+      const voice = voices[lang];
+      if (voice) u.voice = voice;
+      u.lang = voice ? voice.lang : lang === "es" ? "es-ES" : listenAccent;
       // Some phones never say a piece has finished, so move on anyway after a generous time
       let done = false;
       const nextPiece = () => { if (!done) { done = true; clearTimeout(guard); step(k + 1); } };
@@ -1380,7 +1493,12 @@ function startListening(items, title) {
     $("#lsBack").textContent = "";
     lastActivity = Date.now(); // listening counts as studying even though you're not touching the screen
     if (!playing) return;
-    await say(item.kind === "mistake" ? `You got this wrong: ${item.front}. What's the right answer?` : item.front, myRun);
+    // English wording around the card is said in English; the card's own text in its language
+    if (item.kind === "mistake") await say("You got this wrong:", myRun);
+    if (myRun !== run) return;
+    await sayCard(item.front, "question", myRun);
+    if (myRun !== run) return;
+    if (item.kind === "mistake") await say("What's the right answer?", myRun);
     if (myRun !== run) return;
     // Thinking time, with a countdown
     $("#lsThink").hidden = false;
@@ -1392,7 +1510,9 @@ function startListening(items, title) {
     $("#lsThink").hidden = true;
     $("#lsBack").hidden = false;
     $("#lsBack").innerHTML = `<div class="qtag">${mistake ? "✅ Correct answer" : "Answer"}</div>${esc(item.back)}`;
-    await say(`The answer is: ${item.back}`, myRun);
+    await say("The answer is:", myRun);
+    if (myRun !== run) return;
+    await sayCard(item.back, "answer", myRun);
     if (myRun !== run) return;
     if (listenAsk) {
       $("#lsAskBtns").hidden = false;
@@ -1413,9 +1533,9 @@ function startListening(items, title) {
       <div class="answer-btns" style="justify-content:center;flex-wrap:wrap">
         <button class="btn good" id="lsAgain">🔁 Listen again</button><button class="btn secondary" id="lsDone">Done</button></div>`;
     $(".lcontrols").hidden = true;
-    $("#lsAgain").onclick = () => startListening(items, title);
+    $("#lsAgain").onclick = () => startListening(items, title, spanish);
     $("#lsDone").onclick = () => { closeRevise(); render(); };
-    speechSynthesis.speak(new SpeechSynthesisUtterance("Well done, that's all the cards."));
+    say("Well done, that's all the cards.", ++run);
   };
   const setPlaying = on => {
     playing = on;
