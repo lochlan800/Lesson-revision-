@@ -46,6 +46,7 @@
     }
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; } /* hidden always wins over a display style */
   body {
     margin: 0;
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -292,6 +293,14 @@
   .bs-key .sq.sunk { background: #d64545; }
   .bs-key .sq.miss { background: var(--miss); }
   .bs-key .sq.last { box-shadow: 0 0 0 3px #f5c400 inset; }
+
+  /* Listen */
+  .listen { width: 100%; max-width: 640px; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .lcard { width: 100%; background: var(--card); border: 1px solid var(--border); border-radius: 18px; box-shadow: var(--shadow); padding: 22px; text-align: center; min-height: 260px; }
+  .lthink { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 14px 0; color: var(--muted); font-weight: 600; }
+  .lring { --p: 0; width: 34px; height: 34px; border-radius: 50%; background: conic-gradient(var(--accent) calc(var(--p) * 1%), var(--border) 0); transition: background 0.3s; }
+  .lcontrols { display: flex; gap: 12px; }
+  .lcontrols .btn { min-width: 64px; font-size: 1.1rem; }
 
   footer { text-align: center; color: var(--muted); font-size: 0.85rem; padding: 10px 16px 30px; }
   footer button { margin: 4px; }
@@ -573,6 +582,7 @@ function renderTopic(subject, year, topic) {
       <button class="tab" data-tab="mistakes">❌ Mistakes (${topic.mistakes.length})</button>
       <button class="tab" data-tab="cards">🗂️ Flashcards (${topic.cards.length})</button>
       <button class="tab" data-tab="revise">🧠 Revise</button>
+      <button class="tab" data-tab="listen">🎧 Listen</button>
       <button class="tab" data-tab="games">🎲 Games</button>
       <button class="tab" data-tab="links">🔗 Links (${topic.links.length})</button>
     </div>
@@ -587,6 +597,7 @@ function renderTopic(subject, year, topic) {
   else if (topicTab === "cards") renderCards(body, topic);
   else if (topicTab === "links") renderLinks(body, topic);
   else if (topicTab === "games") renderGamesTab(body, topic, subject, year);
+  else if (topicTab === "listen") renderListenTab(body, topic, subject, year);
   else renderReviseTab(body, topic, subject, year);
 }
 
@@ -1214,11 +1225,216 @@ function runDeck(title, deck, opts = {}) {
 
 function closeRevise() {
   if (!overlay) return;
+  if (overlay.cleanup) overlay.cleanup(); // e.g. stop reading aloud
   document.removeEventListener("keydown", overlay.keyHandler);
   clearInterval(overlay.clock);
   overlay.remove();
   overlay = null;
   document.body.style.overflow = "";
+}
+
+// ---------- Listen: flashcards read aloud ----------
+// Reads each card's question, pauses so you can try to remember the answer, then reads the answer.
+// Uses the device's own voice (works offline). Mistakes and improving cards come up more, as in the games.
+const LISTEN_PAUSES = [3, 5, 10];
+const LISTEN_SPEEDS = { slow: 0.8, normal: 1, fast: 1.2 };
+let listenScope = "topic", listenPause = 5, listenSpeed = "normal", listenAsk = false, listenVoice = "";
+
+const canSpeak = () => "speechSynthesis" in window && "SpeechSynthesisUtterance" in window;
+function englishVoices() {
+  if (!canSpeak()) return [];
+  return speechSynthesis.getVoices().filter(v => /^en/i.test(v.lang))
+    .sort((a, b) => (/en-GB/i.test(b.lang) - /en-GB/i.test(a.lang)) || a.name.localeCompare(b.name));
+}
+// Turns card text into something that sounds right: no emoji, and maths symbols said as words
+function speakable(text) {
+  return String(text)
+    .replace(/\p{Extended_Pictographic}|️/gu, "")
+    .replace(/\s*\n+\s*/g, ". ").replace(/([.!?:;])\s*\./g, "$1") // a new line becomes a short pause
+    .replace(/_{3,}/g, " blank ")
+    .replace(/²/g, " squared").replace(/³/g, " cubed")
+    .replace(/×/g, " times ").replace(/÷/g, " divided by ").replace(/π/g, " pi ")
+    .replace(/→|->/g, " goes to ").replace(/≈/g, " is about ").replace(/≠/g, " does not equal ")
+    .replace(/\s+/g, " ").trim();
+}
+
+function renderListenTab(body, topic, subject, year) {
+  const scopes = {
+    topic: { label: "📚 This topic",       name: topic.name,             topics: [topic] },
+    year:  { label: `🎓 Whole of ${year}`, name: `${subject} · ${year}`, topics: topicsFor(subject, year) },
+  };
+  if (!canSpeak()) {
+    body.innerHTML = `<div class="empty">Sorry — this browser can't read text aloud. Try Chrome, Safari or Edge.</div>`;
+    return;
+  }
+  body.innerHTML = `<div class="panel">
+      <p style="margin-top:0"><b>🎧 Listen to your flashcards</b> — great for revising on a walk or on the bus.
+        Each card's question is read out, then there's a pause for you to <b>say or think the answer</b>, then the answer is read out.</p>
+      <label class="check" style="margin-bottom:6px">Cards from</label>
+      <div class="tabs" id="lsScope" style="margin-bottom:12px">${Object.entries(scopes).map(([k, sc]) => `<button class="tab" data-v="${k}">${sc.label}</button>`).join("")}</div>
+      <label class="check" style="margin-bottom:6px">Thinking time before the answer</label>
+      <div class="tabs" id="lsPause" style="margin-bottom:12px">${LISTEN_PAUSES.map(n => `<button class="tab" data-v="${n}">${n} seconds</button>`).join("")}</div>
+      <label class="check" style="margin-bottom:6px">Reading speed</label>
+      <div class="tabs" id="lsSpeed" style="margin-bottom:12px">${Object.keys(LISTEN_SPEEDS).map(k => `<button class="tab" data-v="${k}">${k[0].toUpperCase() + k.slice(1)}</button>`).join("")}</div>
+      <label class="check" style="margin-bottom:6px">Voice</label>
+      <select id="lsVoice" style="width:100%;max-width:360px;padding:10px;border-radius:10px;border:1px solid var(--border);background:var(--card);color:var(--text);font:inherit;margin-bottom:12px"></select>
+      <label class="check" style="margin-bottom:14px"><input type="checkbox" id="lsAsk" ${listenAsk ? "checked" : ""}>
+        After each answer, ask me if I got it (only when you're holding your phone — this updates your ⚡/📈 ratings)</label>
+      <button class="btn good" id="lsGo">🎧 Start listening</button>
+      <p class="hint" style="margin-bottom:0">Mistakes and 📈 improving cards come up more often. Keep the screen on: most phones stop reading aloud when the screen locks.</p>
+    </div>`;
+  const pick = (id, current, set) => body.querySelectorAll(`#${id} .tab`).forEach(b => {
+    b.classList.toggle("active", b.dataset.v === String(current));
+    b.onclick = () => { set(b.dataset.v); render(); };
+  });
+  pick("lsScope", listenScope, v => { listenScope = v; });
+  pick("lsPause", listenPause, v => { listenPause = +v; });
+  pick("lsSpeed", listenSpeed, v => { listenSpeed = v; });
+  // Voices can load a moment after the page does
+  const select = body.querySelector("#lsVoice");
+  const fillVoices = () => {
+    const voices = englishVoices();
+    select.innerHTML = `<option value="">Default voice</option>` + voices.map(v => `<option value="${esc(v.name)}">${esc(v.name)} (${esc(v.lang)})</option>`).join("");
+    select.value = voices.some(v => v.name === listenVoice) ? listenVoice : "";
+  };
+  fillVoices();
+  speechSynthesis.onvoiceschanged = () => { if (select.isConnected) fillVoices(); };
+  select.onchange = () => { listenVoice = select.value; };
+  body.querySelector("#lsAsk").onchange = e => { listenAsk = e.target.checked; };
+  body.querySelector("#lsGo").onclick = () => {
+    const sc = scopes[listenScope];
+    const items = deckItems(sc.topics, true, false);
+    if (!items.length) return alert("There's nothing to listen to yet. Add some flashcards or mistakes first!");
+    startListening(items, sc.name);
+  };
+}
+
+function startListening(items, title) {
+  closeRevise();
+  // One round: every card once, plus extra goes for mistakes and improving cards
+  const next = questionPicker(items);
+  const list = Array.from({ length: items.reduce((n, it) => n + 1 + EXTRA_GOES(it), 0) }, next);
+  overlay = document.createElement("div");
+  overlay.className = "overlay";
+  document.body.append(overlay);
+  document.body.style.overflow = "hidden";
+  const me = overlay;
+  overlay.innerHTML = `
+    <div class="top"><b>🎧 ${esc(title)}</b><span class="ov-timer" id="ovTimer">${dailyTimerText()}</span><button class="btn secondary" id="exit">✕ Exit</button></div>
+    <div class="progress"><div id="lsBar" style="width:0%"></div></div>
+    <div class="listen listen-live">
+      <div class="hint" id="lsCount"></div>
+      <div class="lcard">
+        <div class="qtag" id="lsTag"></div>
+        <div class="qfront" id="lsFront"></div>
+        <div class="lthink" id="lsThink" hidden><div class="lring" id="lsRing"></div><span id="lsLeft"></span></div>
+        <div class="qback" id="lsBack" hidden></div>
+        <div class="answer-btns" id="lsAskBtns" style="justify-content:center" hidden>
+          <button class="btn danger" id="lsNo">✗ Still learning</button><button class="btn good" id="lsYes">✓ Got it</button>
+        </div>
+      </div>
+      <div class="lcontrols">
+        <button class="btn secondary" id="lsPrev" title="Previous card">⏮</button>
+        <button class="btn" id="lsPlay" title="Pause">⏸ Pause</button>
+        <button class="btn secondary" id="lsNext" title="Next card">⏭</button>
+      </div>
+    </div>`;
+  const $ = sel => me.querySelector(sel);
+  let index = 0, playing = true, run = 0, wakeLock = null;
+  const voice = englishVoices().find(v => v.name === listenVoice);
+  // Keep the screen awake while listening, where the browser allows it
+  if (navigator.wakeLock) navigator.wakeLock.request("screen").then(l => { wakeLock = l; }).catch(() => {});
+  me.cleanup = () => { run++; speechSynthesis.cancel(); if (wakeLock) wakeLock.release().catch(() => {}); };
+  $("#exit").onclick = () => { closeRevise(); render(); };
+
+  // Speaks text (in short pieces, which some browsers need) and resolves when done or interrupted
+  const say = (text, myRun) => new Promise(resolve => {
+    const pieces = speakable(text).split(/(?<=[.!?;:])\s+/).filter(Boolean);
+    const step = k => {
+      if (myRun !== run || k >= pieces.length) return resolve();
+      const u = new SpeechSynthesisUtterance(pieces[k]);
+      u.rate = LISTEN_SPEEDS[listenSpeed];
+      if (voice) u.voice = voice; else u.lang = "en-GB";
+      // Some phones never say a piece has finished, so move on anyway after a generous time
+      let done = false;
+      const nextPiece = () => { if (!done) { done = true; clearTimeout(guard); step(k + 1); } };
+      const guard = setTimeout(nextPiece, 2500 + pieces[k].length * 120 / u.rate);
+      u.onend = u.onerror = nextPiece;
+      speechSynthesis.speak(u);
+    };
+    step(0);
+  });
+  const wait = (ms, myRun) => new Promise(r => setTimeout(() => r(myRun === run), ms));
+
+  const playCard = async () => {
+    const myRun = ++run;
+    speechSynthesis.cancel();
+    if (index >= list.length) return finish();
+    const item = list[index];
+    const mistake = item.kind === "mistake" || item.isMistake;
+    $("#lsBar").style.width = (index / list.length) * 100 + "%";
+    $("#lsCount").textContent = `Card ${index + 1} of ${list.length}`;
+    $("#lsTag").textContent = item.kind === "mistake" ? "❌ I got this wrong — what's the right answer?" : "Question";
+    $("#lsFront").textContent = item.front;
+    $("#lsBack").hidden = $("#lsThink").hidden = $("#lsAskBtns").hidden = true;
+    $("#lsBack").textContent = "";
+    lastActivity = Date.now(); // listening counts as studying even though you're not touching the screen
+    if (!playing) return;
+    await say(item.kind === "mistake" ? `You got this wrong: ${item.front}. What's the right answer?` : item.front, myRun);
+    if (myRun !== run) return;
+    // Thinking time, with a countdown
+    $("#lsThink").hidden = false;
+    for (let left = listenPause; left > 0; left--) {
+      $("#lsLeft").textContent = `Your turn to answer… ${left}`;
+      $("#lsRing").style.setProperty("--p", ((listenPause - left) / listenPause) * 100);
+      if (!(await wait(1000, myRun))) return;
+    }
+    $("#lsThink").hidden = true;
+    $("#lsBack").hidden = false;
+    $("#lsBack").innerHTML = `<div class="qtag">${mistake ? "✅ Correct answer" : "Answer"}</div>${esc(item.back)}`;
+    await say(`The answer is: ${item.back}`, myRun);
+    if (myRun !== run) return;
+    if (listenAsk) {
+      $("#lsAskBtns").hidden = false;
+      const gotIt = await new Promise(r => { $("#lsYes").onclick = () => r(true); $("#lsNo").onclick = () => r(false); me.answer = r; });
+      me.answer = null;
+      if (myRun !== run) return;
+      // The thinking time stands in for how long you took, since you answered out loud
+      recordAnswer(item, gotIt, listenPause);
+    } else if (!(await wait(1200, myRun))) return;
+    index++;
+    playCard();
+  };
+  const finish = () => {
+    $("#lsBar").style.width = "100%";
+    me.querySelector(".listen").classList.remove("listen-live");
+    $(".lcard").innerHTML = `<div style="font-size:3rem">🎉</div><h2 style="margin:6px 0">All ${plural(list.length, "card")} done!</h2>
+      <p class="hint">Mistakes and improving cards came up more than once.</p>
+      <div class="answer-btns" style="justify-content:center;flex-wrap:wrap">
+        <button class="btn good" id="lsAgain">🔁 Listen again</button><button class="btn secondary" id="lsDone">Done</button></div>`;
+    $(".lcontrols").hidden = true;
+    $("#lsAgain").onclick = () => startListening(items, title);
+    $("#lsDone").onclick = () => { closeRevise(); render(); };
+    speechSynthesis.speak(new SpeechSynthesisUtterance("Well done, that's all the cards."));
+  };
+  const setPlaying = on => {
+    playing = on;
+    $("#lsPlay").textContent = on ? "⏸ Pause" : "▶ Play";
+    $("#lsPlay").title = on ? "Pause" : "Play";
+    // Pausing stops the card; playing starts it again from its question
+    if (!on) { run++; speechSynthesis.cancel(); } else playCard();
+  };
+  $("#lsPlay").onclick = () => setPlaying(!playing);
+  $("#lsNext").onclick = () => { if (index < list.length) { index++; playCard(); } };
+  $("#lsPrev").onclick = () => { index = Math.max(0, index - 1); playCard(); };
+  overlay.keyHandler = e => {
+    if (e.key === "Escape") { closeRevise(); render(); }
+    else if (e.key === " ") { e.preventDefault(); setPlaying(!playing); }
+    else if (e.key === "ArrowRight") $("#lsNext").click();
+    else if (e.key === "ArrowLeft") $("#lsPrev").click();
+  };
+  document.addEventListener("keydown", overlay.keyHandler);
+  playCard();
 }
 
 // ---------- Revision board games ----------
@@ -2182,7 +2398,7 @@ function hideTip() { tip.style.display = "none"; }
 // Screens where you're actually learning: answering flashcards, and a topic's notes,
 // mistakes and flashcards tabs, plus homework mistakes. Menus, links and scores don't count.
 function isLearning() {
-  if (overlay) return !!overlay.querySelector("#fc, .game-live");
+  if (overlay) return !!overlay.querySelector("#fc, .game-live, .listen-live");
   const [subject, year, topicId] = route();
   if (year === "homework") return true;
   return !!topicId && ["notes", "mistakes", "cards"].includes(topicTab);
